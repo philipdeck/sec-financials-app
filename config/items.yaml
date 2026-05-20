@@ -132,9 +132,13 @@ items:
   - key: shares_diluted
     display_name: Shares (Diluted Weighted Avg)
     statement: income
-    flow_or_stock: flow
+    flow_or_stock: period_avg
     unit: shares
     # Weighted-average diluted shares — the denominator for diluted EPS.
+    # `period_avg`: NOT additive across quarters. The annual 10-K reports a
+    # full-year weighted average, which does NOT equal Q1+Q2+Q3+Q4. M1
+    # leaves Q4 blank with a note; a future milestone (8-K parsing) can
+    # source Q4 directly from the earnings release.
     xbrl_tags:
       - WeightedAverageNumberOfDilutedSharesOutstanding
       - WeightedAverageNumberOfSharesOutstandingDiluted
