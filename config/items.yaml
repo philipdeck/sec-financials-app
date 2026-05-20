@@ -1,0 +1,314 @@
+# Maintained items list for the SEC Financials Extractor.
+#
+# Each item below produces ONE column in the output CSV, in the order listed.
+#
+# Two ways to define how a value is computed:
+#
+#   A) Direct tag lookup — provide `xbrl_tags` (ordered fallback list).
+#      First tag with a reported value wins. Handles taxonomy variation
+#      across filers (e.g. ASC 606 vs older revenue tags).
+#
+#   B) Derivation — provide `derivation` with `add` and (optionally)
+#      `subtract` lists of tags. The item's value is sum(add) − sum(subtract).
+#      Used when no single XBRL tag matches the desired concept (e.g.
+#      total debt = non-current LT debt + current portion of LT debt).
+#
+# Items flagged with "# QUESTION:" comments still need owner confirmation
+# before the list is considered locked. See REQUIREMENTS.md §5.2.
+
+items:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Income Statement
+  # ──────────────────────────────────────────────────────────────────────
+
+  - key: revenue
+    display_name: Revenue
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    xbrl_tags:
+      - Revenues
+      - RevenueFromContractWithCustomerExcludingAssessedTax
+      - RevenueFromContractWithCustomerIncludingAssessedTax
+      - SalesRevenueNet
+      - SalesRevenueGoodsNet
+
+  - key: other_revenue
+    display_name: Other Revenue
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    # Non-operating other income. Includes interest income, investment
+    # gains, and miscellaneous non-operating income items. Confirmed by
+    # owner: interest income belongs here, not in interest_expense.
+    xbrl_tags:
+      - OtherNonoperatingIncomeExpense
+      - NonoperatingIncomeExpense
+      - OtherIncome
+
+  - key: cost_of_sales
+    display_name: Cost of Sales
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    xbrl_tags:
+      - CostOfGoodsAndServicesSold
+      - CostOfRevenue
+      - CostOfGoodsSold
+
+  - key: other_cost_of_sales
+    display_name: Other Cost of Sales
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    # Expected to be blank for most filers. Captures unusual cost-of-sales
+    # line items when present.
+    xbrl_tags:
+      - OtherCostOfOperatingRevenue
+      - OtherCostAndExpenseOperating
+
+  - key: operating_expenses
+    display_name: Operating Expenses
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    # Interpreted as total OpEx (SG&A + R&D + other operating expenses,
+    # i.e. everything between Gross Profit and Operating Income).
+    xbrl_tags:
+      - OperatingExpenses
+      - OperatingCostsAndExpenses
+
+  - key: other_costs
+    display_name: Other Costs
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    # Non-operating other expense, symmetric to `other_revenue`.
+    xbrl_tags:
+      - OtherNonoperatingExpense
+      - OtherExpenses
+
+  - key: interest_expense
+    display_name: Interest Expense
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    # Gross interest cost only. Interest income is captured in
+    # `other_revenue`, not netted here.
+    xbrl_tags:
+      - InterestExpense
+      - InterestExpenseDebt
+      - InterestExpenseOperating
+
+  - key: income_tax_expense
+    display_name: Income Tax Expense
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    xbrl_tags:
+      - IncomeTaxExpenseBenefit
+
+  - key: minority_interest
+    display_name: Net Income Attributable to Noncontrolling Interests
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    xbrl_tags:
+      - NetIncomeLossAttributableToNoncontrollingInterest
+
+  - key: net_income
+    display_name: Net Income
+    statement: income
+    flow_or_stock: flow
+    unit: USD
+    # Net income attributable to the parent's common shareholders, after
+    # minority interest.
+    xbrl_tags:
+      - NetIncomeLoss
+      - ProfitLoss
+      - NetIncomeLossAvailableToCommonStockholdersBasic
+
+  - key: shares_diluted
+    display_name: Shares (Diluted Weighted Avg)
+    statement: income
+    flow_or_stock: flow
+    unit: shares
+    # Weighted-average diluted shares — the denominator for diluted EPS.
+    xbrl_tags:
+      - WeightedAverageNumberOfDilutedSharesOutstanding
+      - WeightedAverageNumberOfSharesOutstandingDiluted
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Balance Sheet
+  # ──────────────────────────────────────────────────────────────────────
+
+  - key: cash
+    display_name: Cash & Equivalents
+    statement: balance_sheet
+    flow_or_stock: stock
+    unit: USD
+    xbrl_tags:
+      - CashAndCashEquivalentsAtCarryingValue
+      - CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+      - Cash
+
+  - key: investments
+    display_name: Short-Term Investments
+    statement: balance_sheet
+    flow_or_stock: stock
+    unit: USD
+    # Short-term marketable securities only — the standard liquidity
+    # metric. Long-term investments are excluded.
+    xbrl_tags:
+      - ShortTermInvestments
+      - MarketableSecuritiesCurrent
+      - AvailableForSaleSecuritiesCurrent
+
+  - key: current_assets
+    display_name: Current Assets
+    statement: balance_sheet
+    flow_or_stock: stock
+    unit: USD
+    xbrl_tags:
+      - AssetsCurrent
+
+  - key: fixed_assets
+    display_name: Fixed Assets (PP&E, net)
+    statement: balance_sheet
+    flow_or_stock: stock
+    unit: USD
+    # Net of accumulated depreciation. If you want gross PP&E, swap to
+    # PropertyPlantAndEquipmentGross.
+    xbrl_tags:
+      - PropertyPlantAndEquipmentNet
+
+  - key: total_assets
+    display_name: Total Assets
+    statement: balance_sheet
+    flow_or_stock: stock
+    unit: USD
+    xbrl_tags:
+      - Assets
+
+  - key: debt
+    display_name: Debt (LT, incl. current portion)
+    statement: balance_sheet
+    flow_or_stock: stock
+    unit: USD
+    # Long-term debt including the current portion (i.e. the part of LT
+    # debt due within 12 months and classified as a current liability).
+    # Excludes pure short-term borrowings (e.g. revolving credit / CP).
+    derivation:
+      add:
+        - LongTermDebtNoncurrent
+        - LongTermDebtCurrent
+      subtract: []
+
+  - key: total_liabilities
+    display_name: Total Liabilities
+    statement: balance_sheet
+    flow_or_stock: stock
+    unit: USD
+    xbrl_tags:
+      - Liabilities
+
+  - key: retained_earnings
+    display_name: Retained Earnings
+    statement: balance_sheet
+    flow_or_stock: stock
+    unit: USD
+    xbrl_tags:
+      - RetainedEarningsAccumulatedDeficit
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Cash Flow Statement
+  # ──────────────────────────────────────────────────────────────────────
+
+  - key: depreciation
+    display_name: Depreciation
+    statement: cash_flow
+    flow_or_stock: flow
+    unit: USD
+    # Split from amortization where possible. Many filers only report a
+    # combined `DepreciationDepletionAndAmortization` figure — in that
+    # case this column will be blank and the combined value (if useful)
+    # would need to be added as its own item later.
+    xbrl_tags:
+      - Depreciation
+      - DepreciationNonproduction
+
+  - key: amortization
+    display_name: Amortization
+    statement: cash_flow
+    flow_or_stock: flow
+    unit: USD
+    xbrl_tags:
+      - AmortizationOfIntangibleAssets
+      - Amortization
+      - AdjustmentForAmortization
+
+  - key: stock_compensation
+    display_name: Stock-Based Compensation
+    statement: cash_flow
+    flow_or_stock: flow
+    unit: USD
+    xbrl_tags:
+      - ShareBasedCompensation
+
+  - key: capex
+    display_name: Capital Spending
+    statement: cash_flow
+    flow_or_stock: flow
+    unit: USD
+    # Reported as a cash outflow (negative) in most filings.
+    xbrl_tags:
+      - PaymentsToAcquirePropertyPlantAndEquipment
+
+  - key: cash_from_operations
+    display_name: Operating Cash Flow
+    statement: cash_flow
+    flow_or_stock: flow
+    unit: USD
+    # Bottom-line total of the operating section of the cash flow statement.
+    xbrl_tags:
+      - NetCashProvidedByUsedInOperatingActivities
+
+  - key: dividends_paid
+    display_name: Dividends Paid
+    statement: cash_flow
+    flow_or_stock: flow
+    unit: USD
+    xbrl_tags:
+      - PaymentsOfDividends
+      - PaymentsOfDividendsCommonStock
+
+  - key: debt_change
+    display_name: Net Debt Change
+    statement: cash_flow
+    flow_or_stock: flow
+    unit: USD
+    # Net cash from debt financing: issuances minus repayments, both
+    # long-term and short-term. Filers that report only the LT components
+    # will have the ST components missing (treated as zero).
+    derivation:
+      add:
+        - ProceedsFromIssuanceOfLongTermDebt
+        - ProceedsFromShortTermDebt
+      subtract:
+        - RepaymentsOfLongTermDebt
+        - RepaymentsOfShortTermDebt
+
+  - key: equity_change
+    display_name: Net Equity Change
+    statement: cash_flow
+    flow_or_stock: flow
+    unit: USD
+    # Net cash from equity financing: stock issuance minus repurchases.
+    # Dividends paid are NOT netted here — tracked separately as
+    # `dividends_paid`.
+    derivation:
+      add:
+        - ProceedsFromIssuanceOfCommonStock
+      subtract:
+        - PaymentsForRepurchaseOfCommonStock
