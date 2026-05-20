@@ -285,6 +285,135 @@ def test_period_avg_q4_left_blank():
 # ──────────────────────────────────────────────────────────────────────────
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Stock items (balance sheet)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_stock_item_pulls_balance_for_each_quarter():
+    """Balance fact (no start date) is picked for each (fy, fq)."""
+    fy = 2024
+    balances = []
+    quarter_ends = {"Q1": date(2023, 12, 30), "Q2": date(2024, 3, 30),
+                    "Q3": date(2024, 6, 29)}
+    for q, end in quarter_ends.items():
+        balances.append(_fact(tag="Cash", val=40_000 if q == "Q1" else
+                              (32_000 if q == "Q2" else 25_000),
+                              end=end, start=None, fy=fy, fp=q, form="10-Q"))
+    balances.append(_fact(tag="Cash", val=29_000, end=date(2024, 9, 28),
+                          start=None, fy=fy, fp="FY", form="10-K"))
+    facts = _make_facts(facts_by_tag_unit={("Cash", "USD"): balances})
+
+    item = Item(
+        key="cash",
+        display_name="Cash",
+        statement="balance_sheet",
+        flow_or_stock="stock",
+        unit="USD",
+        xbrl_tags=("Cash",),
+    )
+
+    rows = extract_quarterly(facts, [item], ticker="TEST", fiscal_years=[fy])
+    by_q = {r.fiscal_quarter: r.values["cash"].value for r in rows}
+    assert by_q["Q1"] == 40_000
+    assert by_q["Q2"] == 32_000
+    assert by_q["Q3"] == 25_000
+    assert by_q["Q4"] == 29_000  # comes from 10-K with fp=FY
+
+
+def test_stock_item_ignores_flow_facts_with_same_tag():
+    """Even if a tag has flow facts (start != None), stock lookup picks instant-context only."""
+    fy = 2024
+    flow_fact = _fact(tag="X", val=999, end=date(2024, 3, 30),
+                      start=date(2024, 1, 1), fy=fy, fp="Q2", form="10-Q")
+    instant_fact = _fact(tag="X", val=100, end=date(2024, 3, 30),
+                         start=None, fy=fy, fp="Q2", form="10-Q")
+    facts = _make_facts(facts_by_tag_unit={("X", "USD"): [flow_fact, instant_fact]})
+
+    item = Item(key="x", display_name="X", statement="balance_sheet",
+                flow_or_stock="stock", unit="USD", xbrl_tags=("X",))
+    rows = extract_quarterly(facts, [item], ticker="T", fiscal_years=[fy])
+    q2 = next(r for r in rows if r.fiscal_quarter == "Q2")
+    assert q2.values["x"].value == 100
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# YTD-subtraction fallback (cash flow items)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _ytd_fact(tag: str, val: float, fy: int, fp: str, months: int, fy_start: date) -> Fact:
+    """Build a YTD flow fact: start = FY start, end = quarter-end."""
+    month_ends = {
+        3: fy_start.replace(month=fy_start.month + 2 if fy_start.month <= 10 else (fy_start.month + 2 - 12)),
+    }
+    # Simpler: pass days
+    end = date.fromordinal(fy_start.toordinal() + months * 30 + 1)
+    return _fact(
+        tag=tag, val=val, end=end, start=fy_start, fy=fy, fp=fp,
+        form="10-Q",
+    )
+
+
+def test_q2_flow_ytd_subtraction_when_no_3mo():
+    """If only YTD facts are reported (typical for cash flow), Q2 = 6mo − 3mo."""
+    fy = 2024
+    fy_start = date(2023, 10, 1)
+    q1_ytd = _fact(tag="CFO", val=100, end=date(2023, 12, 31), start=fy_start,
+                   fy=fy, fp="Q1", form="10-Q")  # 92 days, ≈ 3mo
+    q2_ytd = _fact(tag="CFO", val=250, end=date(2024, 3, 31), start=fy_start,
+                   fy=fy, fp="Q2", form="10-Q")  # 183 days, ≈ 6mo
+    facts = _make_facts(facts_by_tag_unit={("CFO", "USD"): [q1_ytd, q2_ytd]})
+
+    item = Item(key="cfo", display_name="CFO", statement="cash_flow",
+                flow_or_stock="flow", unit="USD", xbrl_tags=("CFO",))
+    rows = extract_quarterly(facts, [item], ticker="T", fiscal_years=[fy])
+    by_q = {r.fiscal_quarter: r.values["cfo"].value for r in rows}
+    assert by_q["Q1"] == 100  # 3-month direct
+    assert by_q["Q2"] == 150  # 250 − 100
+
+
+def test_q3_flow_ytd_subtraction():
+    """Q3 standalone = 9mo YTD − 6mo YTD."""
+    fy = 2024
+    fy_start = date(2023, 10, 1)
+    q1 = _fact(tag="CFO", val=100, end=date(2023, 12, 31), start=fy_start,
+               fy=fy, fp="Q1", form="10-Q")
+    q2 = _fact(tag="CFO", val=250, end=date(2024, 3, 31), start=fy_start,
+               fy=fy, fp="Q2", form="10-Q")
+    q3 = _fact(tag="CFO", val=420, end=date(2024, 6, 30), start=fy_start,
+               fy=fy, fp="Q3", form="10-Q")  # 273 days, ≈ 9mo
+    facts = _make_facts(facts_by_tag_unit={("CFO", "USD"): [q1, q2, q3]})
+
+    item = Item(key="cfo", display_name="CFO", statement="cash_flow",
+                flow_or_stock="flow", unit="USD", xbrl_tags=("CFO",))
+    rows = extract_quarterly(facts, [item], ticker="T", fiscal_years=[fy])
+    by_q = {r.fiscal_quarter: r.values["cfo"].value for r in rows}
+    assert by_q["Q3"] == 170  # 420 − 250
+
+
+def test_3mo_direct_preferred_over_ytd_subtraction():
+    """When both 3-month and YTD facts exist, 3-month direct wins (no derivation)."""
+    fy = 2024
+    fy_start = date(2023, 10, 1)
+    # 3-month standalone for Q2: start=Jan 1, end=Mar 31
+    q2_3mo = _fact(tag="Rev", val=42, end=date(2024, 3, 31), start=date(2024, 1, 1),
+                   fy=fy, fp="Q2", form="10-Q")
+    # 6-month YTD: start=Oct 1, end=Mar 31
+    q1_ytd = _fact(tag="Rev", val=30, end=date(2023, 12, 31), start=fy_start,
+                   fy=fy, fp="Q1", form="10-Q")
+    q2_ytd = _fact(tag="Rev", val=100, end=date(2024, 3, 31), start=fy_start,
+                   fy=fy, fp="Q2", form="10-Q")
+    facts = _make_facts(facts_by_tag_unit={("Rev", "USD"): [q2_3mo, q1_ytd, q2_ytd]})
+
+    item = Item(key="rev", display_name="Rev", statement="income",
+                flow_or_stock="flow", unit="USD", xbrl_tags=("Rev",))
+    rows = extract_quarterly(facts, [item], ticker="T", fiscal_years=[fy])
+    q2 = next(r for r in rows if r.fiscal_quarter == "Q2").values["rev"].value
+    # Should be the 3-month direct value (42), not the YTD diff (100 − 30 = 70).
+    assert q2 == 42
+
+
 def test_discover_unions_years_across_probe_tags():
     """When an issuer changes tags mid-history, we union years across probes."""
     facts = _make_facts(

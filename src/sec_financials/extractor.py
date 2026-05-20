@@ -3,23 +3,33 @@
 Period model
 ------------
 For each item × (fiscal_year, fiscal_quarter) we produce one value plus a
-source descriptor (which filing(s) it came from).
+source descriptor (which filing(s) it came from). The handling depends on
+the item's `flow_or_stock` classification (REQUIREMENTS.md §5.2):
 
-Flow items (income statement, cash flow):
-  - Q1 / Q2 / Q3: take the 3-month standalone value from the 10-Q filing
-    for that fiscal period. Most income statement items report this
-    directly. (YTD subtraction is implemented for items that don't, used
-    in M2 for cash flow.)
-  - Q4: derived as `annual 10-K − (Q1+Q2+Q3)`. This is the M1 simplification
-    documented in REQUIREMENTS.md §5.5 as the fallback when 8-K parsing
-    isn't available. 8-K-based Q4 sourcing is a later milestone.
+Flow items — income statement, cash flow
+  - Q1 / Q2 / Q3:
+      1. Prefer 3-month standalone (start = quarter start, ~90-day span)
+         from the 10-Q. Most income statement items report this directly.
+      2. Fallback: YTD subtraction.
+           Q1 → 3mo YTD itself.
+           Q2 → 6mo YTD (Q2 10-Q) − 3mo YTD (Q1 10-Q).
+           Q3 → 9mo YTD (Q3 10-Q) − 6mo YTD (Q2 10-Q).
+         This is the standard pattern for cash flow items, which the SEC
+         only publishes as YTD in 10-Qs (no 3-month column).
+  - Q4: derived as `annual 10-K − (Q1+Q2+Q3)`. M1 fallback per
+    REQUIREMENTS.md §5.5. 8-K-based Q4 sourcing is a later milestone.
 
-Stock items (balance sheet):
-  - Period-end balance for each (fy, fq). (Not used in M1 — extractor will
-    handle them once the balance-sheet milestone lands.)
+Stock items — balance sheet
+  - Q1 / Q2 / Q3: balance fact for the matching (fy, fp) from a 10-Q.
+  - Q4: balance fact for (fy, fp=FY) from a 10-K.
+  - No derivation — balances are point-in-time.
 
-Restated values: when a period is reported by multiple filings (original
-10-Q, later 10-K/A, etc.), the most recently `filed` value wins.
+Period-average items — weighted averages (e.g. diluted shares)
+  - Q1 / Q2 / Q3: same as flow.
+  - Q4: blank with a note (annual weighted-avg ≠ Σ quarters).
+
+Restated values: when a period is reported by multiple filings, the most
+recently `filed` value wins.
 """
 
 from __future__ import annotations
@@ -147,6 +157,35 @@ def _select_flow_fact(
     return candidates[0]
 
 
+def _select_stock_fact(
+    facts: Sequence[Fact],
+    *,
+    fiscal_year: int,
+    fiscal_period: str,
+    forms: tuple[str, ...],
+) -> Fact | None:
+    """Pick the best-matching balance-sheet (point-in-time) fact.
+
+    Stock facts have no `start` date (instant context in XBRL). We sort
+    by (end DESC, filed DESC) — same logic as flow facts, for the same
+    reasons (prior-period comparatives are tagged with the same fy/fp
+    but an older end; restatements share end but differ in filed date).
+    """
+    candidates: list[Fact] = []
+    for f in facts:
+        if f.fiscal_year != fiscal_year or f.fiscal_period != fiscal_period:
+            continue
+        if f.form not in forms:
+            continue
+        if f.start is not None:
+            continue  # not a stock fact
+        candidates.append(f)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda f: (f.end, f.filed), reverse=True)
+    return candidates[0]
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Per-(item, period) extraction
 # ──────────────────────────────────────────────────────────────────────────
@@ -182,7 +221,66 @@ def _annual_value(
     )
 
 
-def _extract_single_tag_quarter(
+def _ytd_value(
+    facts: CompanyFacts,
+    tag: str,
+    fiscal_year: int,
+    fiscal_period: str,
+    months: int,
+    unit: str = "USD",
+) -> Fact | None:
+    """YTD flow value from a 10-Q: start = FY start, end = quarter end.
+
+    `months` is the expected YTD length in months (3, 6, or 9).
+    """
+    duration_range = {3: _DURATION_3MO, 6: _DURATION_6MO, 9: _DURATION_9MO}[months]
+    return _select_flow_fact(
+        facts.facts_for(tag, unit),
+        fiscal_year=fiscal_year,
+        fiscal_period=fiscal_period,
+        duration_range=duration_range,
+        forms=("10-Q", "10-Q/A"),
+    )
+
+
+def _balance_value(
+    facts: CompanyFacts,
+    tag: str,
+    fiscal_year: int,
+    fiscal_quarter: str,
+    unit: str = "USD",
+) -> Fact | None:
+    """Stock (balance-sheet) value at the end of a fiscal quarter.
+
+    Q1/Q2/Q3 balances come from the corresponding 10-Q. Q4 balance comes
+    from the 10-K (the SEC tags Q4-end balances with fp=FY in the 10-K).
+    """
+    if fiscal_quarter == "Q4":
+        return _select_stock_fact(
+            facts.facts_for(tag, unit),
+            fiscal_year=fiscal_year,
+            fiscal_period="FY",
+            forms=("10-K", "10-K/A"),
+        )
+    return _select_stock_fact(
+        facts.facts_for(tag, unit),
+        fiscal_year=fiscal_year,
+        fiscal_period=fiscal_quarter,
+        forms=("10-Q", "10-Q/A"),
+    )
+
+
+def _src_from_fact(fact: Fact, description: str) -> ValueSource:
+    return ValueSource(
+        accession=fact.accession,
+        form=fact.form,
+        filed=fact.filed,
+        tag=fact.tag,
+        description=description,
+    )
+
+
+def _resolve_flow_tag_quarter(
     facts: CompanyFacts,
     tag: str,
     fiscal_year: int,
@@ -190,27 +288,61 @@ def _extract_single_tag_quarter(
     prior_quarter_values: dict[str, float],
     unit: str = "USD",
 ) -> tuple[float | None, list[ValueSource], date | None, str]:
-    """Find the per-tag value for one (fy, fq), handling Q4 derivation.
+    """Resolve a per-tag flow value for one (fy, fq).
 
-    `prior_quarter_values` maps "Q1"/"Q2"/"Q3" to already-resolved values
-    for the same tag, used for Q4 derivation. Pass an empty dict for
-    Q1–Q3.
+    For Q1–Q3: try 3-month standalone first; if missing, try YTD
+    subtraction (used by most cash-flow line items, which are filed
+    YTD-only).
+
+    For Q4: derive as annual − (Q1+Q2+Q3) using the supplied priors.
+    `prior_quarter_values` must contain Q1/Q2/Q3 for Q4 to derive.
 
     Returns (value, sources, period_end, note).
     """
+    # Q1-Q3: try 3-month direct, then YTD subtraction.
     if fiscal_quarter in ("Q1", "Q2", "Q3"):
-        fact = _three_month_value(facts, tag, fiscal_year, fiscal_quarter, unit)
-        if fact is None:
-            return None, [], None, ""
-        src = ValueSource(
-            accession=fact.accession,
-            form=fact.form,
-            filed=fact.filed,
-            tag=tag,
-            description=f"{fact.form} 3-month direct",
-        )
-        return fact.val, [src], fact.end, ""
+        direct = _three_month_value(facts, tag, fiscal_year, fiscal_quarter, unit)
+        if direct is not None:
+            return direct.val, [_src_from_fact(direct, "10-Q 3-month direct")], direct.end, ""
 
+        # YTD-subtraction fallback. SEC cash flow line items are typically
+        # YTD-only in 10-Qs (no 3-month column).
+        if fiscal_quarter == "Q1":
+            # Q1 YTD == 3-month standalone == Q1 value. If 3-month direct
+            # missed, there's no useful YTD fallback at Q1.
+            return None, [], None, ""
+
+        if fiscal_quarter == "Q2":
+            ytd_6mo = _ytd_value(facts, tag, fiscal_year, "Q2", months=6, unit=unit)
+            ytd_3mo = _ytd_value(facts, tag, fiscal_year, "Q1", months=3, unit=unit)
+            if ytd_6mo is None or ytd_3mo is None:
+                return None, [], None, ""
+            return (
+                ytd_6mo.val - ytd_3mo.val,
+                [
+                    _src_from_fact(ytd_6mo, "Q2 derived = 6mo YTD − 3mo YTD"),
+                    _src_from_fact(ytd_3mo, "Q2 derived = 6mo YTD − 3mo YTD"),
+                ],
+                ytd_6mo.end,
+                "",
+            )
+
+        # Q3
+        ytd_9mo = _ytd_value(facts, tag, fiscal_year, "Q3", months=9, unit=unit)
+        ytd_6mo = _ytd_value(facts, tag, fiscal_year, "Q2", months=6, unit=unit)
+        if ytd_9mo is None or ytd_6mo is None:
+            return None, [], None, ""
+        return (
+            ytd_9mo.val - ytd_6mo.val,
+            [
+                _src_from_fact(ytd_9mo, "Q3 derived = 9mo YTD − 6mo YTD"),
+                _src_from_fact(ytd_6mo, "Q3 derived = 9mo YTD − 6mo YTD"),
+            ],
+            ytd_9mo.end,
+            "",
+        )
+
+    # Q4 — derive from annual − (Q1+Q2+Q3) using supplied priors.
     assert fiscal_quarter == "Q4"
     annual = _annual_value(facts, tag, fiscal_year, unit)
     if annual is None:
@@ -219,7 +351,6 @@ def _extract_single_tag_quarter(
     q2 = prior_quarter_values.get("Q2")
     q3 = prior_quarter_values.get("Q3")
     if None in (q1, q2, q3) or len(prior_quarter_values) < 3:
-        # Can't derive Q4 without all three earlier quarters.
         return (
             None,
             [],
@@ -227,14 +358,27 @@ def _extract_single_tag_quarter(
             f"Q4 not derivable for {tag}: missing one of Q1/Q2/Q3",
         )
     q4_val = annual.val - q1 - q2 - q3  # type: ignore[operator]
-    src = ValueSource(
-        accession=annual.accession,
-        form=annual.form,
-        filed=annual.filed,
-        tag=tag,
-        description="Q4 derived = 10-K annual − (Q1+Q2+Q3)",
+    return (
+        q4_val,
+        [_src_from_fact(annual, "Q4 derived = 10-K annual − (Q1+Q2+Q3)")],
+        annual.end,
+        "",
     )
-    return q4_val, [src], annual.end, ""
+
+
+def _resolve_stock_tag_quarter(
+    facts: CompanyFacts,
+    tag: str,
+    fiscal_year: int,
+    fiscal_quarter: str,
+    unit: str = "USD",
+) -> tuple[float | None, list[ValueSource], date | None, str]:
+    """Resolve a per-tag balance-sheet value for one (fy, fq)."""
+    fact = _balance_value(facts, tag, fiscal_year, fiscal_quarter, unit)
+    if fact is None:
+        return None, [], None, ""
+    desc = "10-K balance" if fiscal_quarter == "Q4" else "10-Q balance"
+    return fact.val, [_src_from_fact(fact, desc)], fact.end, ""
 
 
 def _combine_derivation(
@@ -358,50 +502,37 @@ def _extract_for_item(
 ) -> tuple[float | None, date | None, list[ValueSource], str]:
     """Extract one cell: (item, fy, fq).
 
-    Handles both direct-tag items and derived items. For derived items the
-    Q4 derivation runs per component tag, then the components are combined.
+    Dispatches on item.flow_or_stock to pick the right resolution path,
+    and on item.derivation to combine multi-tag components.
     """
     unit = item.unit
+    is_stock = item.flow_or_stock == "stock"
 
     if item.derivation is not None:
-        # Resolve each component tag independently.
-        components: dict[
-            str, tuple[float | None, list[ValueSource], date | None]
-        ] = {}
-        for tag in item.derivation.add + item.derivation.subtract:
-            # For Q4 of a derived item, re-resolve Q1-Q3 PER-TAG (each
-            # component contributes its own Q4 derivation).
-            prior_for_tag: dict[str, float] = {}
-            if fiscal_quarter == "Q4":
-                for q in ("Q1", "Q2", "Q3"):
-                    f = _three_month_value(facts, tag, fiscal_year, q, unit)
-                    if f is not None:
-                        prior_for_tag[q] = f.val
+        return _extract_derived_item(
+            facts=facts,
+            item=item,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            unit=unit,
+            is_stock=is_stock,
+        )
 
-            val, sources, pe, _note = _extract_single_tag_quarter(
-                facts, tag, fiscal_year, fiscal_quarter, prior_for_tag, unit
-            )
-            components[tag] = (val, sources, pe)
-
-        value, sources, period_end = _combine_derivation(components, item.derivation)
-        note = ""
-        if value is None:
-            note = f"{item.key}: no component tags reported"
-        return value, period_end, sources, note
-
-    # Direct-tag item — try the fallback list in order, per period.
-    # Issuers sometimes switch concept tags mid-history (e.g. Apple moved
-    # from SalesRevenueNet to RevenueFromContractWithCustomer... at ASC
-    # 606 adoption). For Q1-Q3 we look at each tag independently. For
-    # Q4, we use cross-tag Q1-Q3 values from the same item — otherwise the
-    # mid-history transition makes Q4 underivable.
     assert item.xbrl_tags is not None
 
-    # `period_avg` items (e.g. weighted-average diluted shares) are NOT
-    # additive across quarters — the annual 10-K reports a full-year
-    # weighted average that doesn't equal Q1+Q2+Q3+Q4. Leave Q4 blank in
-    # M1 and record the reason. A later milestone (8-K parsing) can source
-    # Q4 directly.
+    # ── Stock items: balance lookup, no Q4 derivation. ────────────────────
+    if is_stock:
+        for tag in item.xbrl_tags:
+            if not facts.has_tag(tag):
+                continue
+            value, sources, period_end, note = _resolve_stock_tag_quarter(
+                facts, tag, fiscal_year, fiscal_quarter, unit
+            )
+            if value is not None:
+                return value, period_end, sources, note
+        return None, None, [], f"{item.key}: no balance found"
+
+    # ── period_avg items: Q4 blank, Q1-Q3 use flow path. ─────────────────
     if fiscal_quarter == "Q4" and item.flow_or_stock == "period_avg":
         return (
             None,
@@ -410,8 +541,11 @@ def _extract_for_item(
             f"{item.key}: Q4 not derivable (period_avg, requires 8-K source)",
         )
 
+    # ── Flow items: Q4 = cross-tag annual − (cross-tag Q1+Q2+Q3). ────────
+    # The Q1-Q3 values come from `prior_per_item` (already resolved for
+    # THIS item, possibly across different tags — required when an issuer
+    # switched concept tags mid-history, e.g. ASC 606).
     if fiscal_quarter == "Q4":
-        # Pull already-resolved Q1-Q3 values for THIS ITEM (any tag).
         cross_tag_priors: dict[str, float] = {}
         for q in ("Q1", "Q2", "Q3"):
             ev = prior_per_item.get(item.key, {}).get(q)
@@ -424,8 +558,6 @@ def _extract_for_item(
                 [],
                 f"{item.key}: can't derive Q4, Q1-Q3 not all resolved",
             )
-
-        # Find an annual 10-K value under any tag in the fallback list.
         for tag in item.xbrl_tags:
             if not facts.has_tag(tag):
                 continue
@@ -438,24 +570,63 @@ def _extract_for_item(
                 - cross_tag_priors["Q2"]
                 - cross_tag_priors["Q3"]
             )
-            src = ValueSource(
-                accession=annual.accession,
-                form=annual.form,
-                filed=annual.filed,
-                tag=tag,
-                description="Q4 derived = 10-K annual − (Q1+Q2+Q3)",
+            return (
+                q4_val,
+                annual.end,
+                [_src_from_fact(annual, "Q4 derived = 10-K annual − (Q1+Q2+Q3)")],
+                "",
             )
-            return q4_val, annual.end, [src], ""
         return None, None, [], f"{item.key}: no annual 10-K value found"
 
-    # Q1 / Q2 / Q3: try each tag in order, first match wins.
+    # ── Flow items, Q1/Q2/Q3: try each tag in order. ─────────────────────
     for tag in item.xbrl_tags:
         if not facts.has_tag(tag):
             continue
-        value, sources, period_end, note = _extract_single_tag_quarter(
+        value, sources, period_end, note = _resolve_flow_tag_quarter(
             facts, tag, fiscal_year, fiscal_quarter, {}, unit
         )
         if value is not None:
             return value, period_end, sources, note
 
     return None, None, [], f"{item.key}: no reporting tag found"
+
+
+def _extract_derived_item(
+    *,
+    facts: CompanyFacts,
+    item: Item,
+    fiscal_year: int,
+    fiscal_quarter: str,
+    unit: str,
+    is_stock: bool,
+) -> tuple[float | None, date | None, list[ValueSource], str]:
+    """Resolve each component tag, then combine via add/subtract."""
+    assert item.derivation is not None
+
+    components: dict[str, tuple[float | None, list[ValueSource], date | None]] = {}
+    for tag in item.derivation.add + item.derivation.subtract:
+        if is_stock:
+            val, sources, pe, _note = _resolve_stock_tag_quarter(
+                facts, tag, fiscal_year, fiscal_quarter, unit
+            )
+        else:
+            # For derived flow Q4, gather this tag's own Q1-Q3 via the
+            # resolver (which itself handles 3mo direct + YTD fallback).
+            prior_for_tag: dict[str, float] = {}
+            if fiscal_quarter == "Q4":
+                for q in ("Q1", "Q2", "Q3"):
+                    v, _s, _pe, _n = _resolve_flow_tag_quarter(
+                        facts, tag, fiscal_year, q, {}, unit
+                    )
+                    if v is not None:
+                        prior_for_tag[q] = v
+            val, sources, pe, _note = _resolve_flow_tag_quarter(
+                facts, tag, fiscal_year, fiscal_quarter, prior_for_tag, unit
+            )
+        components[tag] = (val, sources, pe)
+
+    value, sources, period_end = _combine_derivation(components, item.derivation)
+    note = ""
+    if value is None:
+        note = f"{item.key}: no component tags reported"
+    return value, period_end, sources, note

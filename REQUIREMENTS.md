@@ -1,6 +1,6 @@
 # SEC Financials Extractor — Requirements
 
-**Status:** Draft v0.12
+**Status:** Draft v0.13
 **Owner:** pdeck
 **Last updated:** 2026-05-19
 **Repository:** _TBD (to be created on GitHub)_
@@ -415,13 +415,19 @@ The deployed app must operate with **no Claude / LLM involvement at runtime**.
   verifies a known revenue value within tolerance.
 - Snapshot test for the CSV format so layout changes are explicit.
 
-## 13. Milestones (proposed)
+## 13. Milestones
 
-1. **M0 — Spec lock:** resolve all **[OPEN]** items in §5.3 (CSV format) and §7
-   (stack). Output: this doc at v1.0.
-2. **M1 — Backend MVP:** ticker→CIK, fetch companyfacts, extract income
-   statement only, return CSV via CLI.
-3. **M2 — Full statements:** add balance sheet + cash flow extraction.
+1. **M0 — Spec lock:** _Complete (v0.12)._ All initial open questions resolved.
+2. **M1 — Backend MVP:** _Complete._ ticker→CIK, companyfacts fetch, income
+   statement extraction (5y × 4q), CSV+sources zip output via CLI.
+   Verified against AAPL FY2021–FY2025: quarterly sums match annual 10-K
+   totals to the dollar.
+3. **M2 — Full statements:** _Complete._ Balance sheet (stock items via
+   point-in-time XBRL contexts) and cash flow (YTD-subtraction for Q2/Q3)
+   extraction wired in. Derived items (`debt`, `debt_change`,
+   `equity_change`) work across both flow and stock. Verified against AAPL
+   FY2024: total assets, debt, retained earnings, CFO, capex, dividends,
+   and the ~$95B buyback all match Apple's actual filings.
 4. **M3 — Web UI:** form + download button on a deployed URL.
 5. **M4 — Hardening:** error handling, rate limiting, caching, CI.
 6. **M5 — v1 release:** documented, deployed, public URL shared.
@@ -447,3 +453,4 @@ be added here as implementation surfaces them.
 | 2026-05-19 | 0.10    | Source-traceability sidecar CSV is **always emitted**, packaged with the main CSV in a single zip download. **GitHub repo = public** locked in §9. Open-questions list pruned; hosting provider explicitly added as the remaining decision (custom domain deferred until hosting is picked). |
 | 2026-05-19 | 0.11    | Hosting locked: **Render free tier** with git-push deploys and automatic HTTPS. Briefly considered PythonAnywhere for its no-cold-starts behavior but rejected because (a) it would have forced switching the framework from FastAPI to Flask (PythonAnywhere is WSGI-first), and (b) custom domains there require a paid plan ($60/yr) whereas Render supports them on free tier. **Custom domain: subdomain of `extuple.com`** (already owned, used for email — apex stays untouched; only an added CNAME). Accepted tradeoff: ~30s cold start after ~15 min of idle on Render free tier. Specific subdomain name still TBD. |
 | 2026-05-19 | 0.12    | Subdomain locked: **`projects.extuple.com`** as a personal-tools umbrella. Documented the multi-project-future implication (path-prefix vs sub-subdomain) for if another project ships under the same umbrella later — decision deferred until needed. **All initial spec open questions resolved.** |
+| 2026-05-20 | 0.13    | **M2 complete.** Extractor now handles balance sheet (stock items via point-in-time XBRL contexts: no duration filter, Q4 balance pulled from 10-K with fp=FY) and cash flow (YTD-subtraction: Q2 = 6mo − 3mo, Q3 = 9mo − 6mo). Verified against AAPL FY2024: total assets / debt / retained earnings / CFO / capex / dividends all match actual filings. Updated §13 milestone status. Known minor data gap (not blocking): a few Apple-specific tags missing from items.yaml (D&A combined, post-2023 interest expense) — items.yaml-only fix when needed. |
