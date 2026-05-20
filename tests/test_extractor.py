@@ -19,6 +19,7 @@ from sec_financials.companyfacts import CompanyFacts, Fact
 from sec_financials.config import Item
 from sec_financials.extractor import (
     _select_flow_fact,
+    discover_quarters_to_extract,
     discover_recent_fiscal_years,
     extract_quarterly,
 )
@@ -412,6 +413,103 @@ def test_3mo_direct_preferred_over_ytd_subtraction():
     q2 = next(r for r in rows if r.fiscal_quarter == "Q2").values["rev"].value
     # Should be the 3-month direct value (42), not the YTD diff (100 − 30 = 70).
     assert q2 == 42
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# In-progress fiscal year (10-Qs filed but no 10-K yet)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _quarter_10q_fact(tag: str, val: float, fy: int, fp: str, end: date) -> Fact:
+    """Build a Q1/Q2/Q3 10-Q fact (3-month, start = quarter start)."""
+    months_before = {"Q1": 3, "Q2": 3, "Q3": 3}[fp]
+    return _fact(
+        tag=tag,
+        val=val,
+        end=end,
+        start=date.fromordinal(end.toordinal() - 90),
+        fy=fy,
+        fp=fp,
+        form="10-Q",
+    )
+
+
+def test_discover_includes_in_progress_year_with_filed_quarters_only():
+    """5 completed years + 1 in-progress year (Q1+Q2 only) → 22 quarters."""
+    facts_data: dict[tuple[str, str], list[Fact]] = {("Revenues", "USD"): []}
+    # 5 completed FYs
+    for fy in (2021, 2022, 2023, 2024, 2025):
+        facts_data[("Revenues", "USD")].append(
+            _annual_fact("Revenues", 100, fy, date(fy, 9, 30))
+        )
+    # In-progress FY2026: only Q1 and Q2 10-Qs filed
+    facts_data[("Revenues", "USD")].append(
+        _quarter_10q_fact("Revenues", 200, 2026, "Q1", date(2025, 12, 27))
+    )
+    facts_data[("Revenues", "USD")].append(
+        _quarter_10q_fact("Revenues", 210, 2026, "Q2", date(2026, 3, 28))
+    )
+    facts = _make_facts(facts_by_tag_unit=facts_data)
+
+    quarters = discover_quarters_to_extract(facts, n_completed=5)
+    # Completed: 5 × 4 = 20. In-progress: 2.
+    assert len(quarters) == 22
+    in_progress = [q for q in quarters if q[0] == 2026]
+    assert in_progress == [(2026, "Q1"), (2026, "Q2")]
+    # No Q3 or Q4 of in-progress year.
+    assert (2026, "Q3") not in quarters
+    assert (2026, "Q4") not in quarters
+
+
+def test_discover_excludes_in_progress_year_if_10k_also_exists():
+    """If a year has both 10-K and 10-Qs, it's a completed year — not in-progress."""
+    facts_data: dict[tuple[str, str], list[Fact]] = {("Revenues", "USD"): [
+        _annual_fact("Revenues", 100, 2024, date(2024, 9, 30)),
+        _quarter_10q_fact("Revenues", 25, 2024, "Q1", date(2023, 12, 30)),
+    ]}
+    facts = _make_facts(facts_by_tag_unit=facts_data)
+    quarters = discover_quarters_to_extract(facts, n_completed=5)
+    # All 4 quarters of 2024, no separate "in-progress" entries.
+    fy_2024 = [q for q in quarters if q[0] == 2024]
+    assert set(q[1] for q in fy_2024) == {"Q1", "Q2", "Q3", "Q4"}
+
+
+def test_discover_picks_most_recent_in_progress_year_only():
+    """If multiple years have 10-Qs but no 10-K, only the most recent is included."""
+    facts_data: dict[tuple[str, str], list[Fact]] = {("Revenues", "USD"): [
+        # No 10-Ks for 2025 or 2026
+        _quarter_10q_fact("Revenues", 50, 2025, "Q1", date(2024, 12, 28)),
+        _quarter_10q_fact("Revenues", 70, 2026, "Q1", date(2025, 12, 27)),
+    ]}
+    facts = _make_facts(facts_by_tag_unit=facts_data)
+    quarters = discover_quarters_to_extract(facts, n_completed=5)
+    # 2025 not included because 2026 is the most-recent in-progress year.
+    assert any(q[0] == 2026 for q in quarters)
+    assert not any(q[0] == 2025 for q in quarters)
+
+
+def test_extract_emits_only_filed_in_progress_quarters():
+    """End-to-end: extract should produce rows only for in-progress quarters with data."""
+    facts_data: dict[tuple[str, str], list[Fact]] = {("Revenues", "USD"): [
+        _annual_fact("Revenues", 400, 2025, date(2025, 9, 30)),
+        # Provide annual Q1-Q3 for 2025 so Q4 derivation works
+        _quarter_10q_fact("Revenues", 100, 2025, "Q1", date(2024, 12, 28)),
+        _quarter_10q_fact("Revenues", 100, 2025, "Q2", date(2025, 3, 29)),
+        _quarter_10q_fact("Revenues", 100, 2025, "Q3", date(2025, 6, 28)),
+        # In-progress FY2026: only Q1 filed
+        _quarter_10q_fact("Revenues", 150, 2026, "Q1", date(2025, 12, 27)),
+    ]}
+    facts = _make_facts(facts_by_tag_unit=facts_data)
+
+    item = Item(key="revenue", display_name="Revenue", statement="income",
+                flow_or_stock="flow", unit="USD", xbrl_tags=("Revenues",))
+    rows = extract_quarterly(facts, [item], ticker="TEST")
+    # 2025: 4 rows, 2026: 1 row → 5 rows total
+    assert len(rows) == 5
+    in_progress_rows = [r for r in rows if r.fiscal_year == 2026]
+    assert len(in_progress_rows) == 1
+    assert in_progress_rows[0].fiscal_quarter == "Q1"
+    assert in_progress_rows[0].values["revenue"].value == 150
 
 
 def test_discover_unions_years_across_probe_tags():

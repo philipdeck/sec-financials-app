@@ -1,6 +1,6 @@
 # SEC Financials Extractor — Requirements
 
-**Status:** Draft v0.13
+**Status:** Draft v0.14
 **Owner:** pdeck
 **Last updated:** 2026-05-19
 **Repository:** _TBD (to be created on GitHub)_
@@ -49,8 +49,13 @@ intervention from Claude (or any other assistant) at runtime.
 - Free-text ticker field (case-insensitive, trimmed).
 - Validation: ticker must resolve to a CIK via the SEC ticker→CIK mapping.
 - Friendly error if ticker not found.
-- **Period coverage: 5 fiscal years** of quarterly data (≈ 20 quarters,
-  Q1–Q4 each year). Fixed for v1 — not user-selectable.
+- **Period coverage:** the **5 most recent completed fiscal years** (each
+  with Q1–Q4) plus **the in-progress fiscal year's actually-filed
+  quarters** (Q1, Q2, and/or Q3). The in-progress year contributes
+  partial rows because there is no 10-K yet from which to derive Q4. As
+  the issuer files each new 10-Q, those quarters appear automatically;
+  when the 10-K eventually lands, the year is rolled into the completed
+  set on the next extraction (with Q4 derived).
 
 ### 5.2 Data scope
 
@@ -454,3 +459,4 @@ be added here as implementation surfaces them.
 | 2026-05-19 | 0.11    | Hosting locked: **Render free tier** with git-push deploys and automatic HTTPS. Briefly considered PythonAnywhere for its no-cold-starts behavior but rejected because (a) it would have forced switching the framework from FastAPI to Flask (PythonAnywhere is WSGI-first), and (b) custom domains there require a paid plan ($60/yr) whereas Render supports them on free tier. **Custom domain: subdomain of `extuple.com`** (already owned, used for email — apex stays untouched; only an added CNAME). Accepted tradeoff: ~30s cold start after ~15 min of idle on Render free tier. Specific subdomain name still TBD. |
 | 2026-05-19 | 0.12    | Subdomain locked: **`projects.extuple.com`** as a personal-tools umbrella. Documented the multi-project-future implication (path-prefix vs sub-subdomain) for if another project ships under the same umbrella later — decision deferred until needed. **All initial spec open questions resolved.** |
 | 2026-05-20 | 0.13    | **M2 complete.** Extractor now handles balance sheet (stock items via point-in-time XBRL contexts: no duration filter, Q4 balance pulled from 10-K with fp=FY) and cash flow (YTD-subtraction: Q2 = 6mo − 3mo, Q3 = 9mo − 6mo). Verified against AAPL FY2024: total assets / debt / retained earnings / CFO / capex / dividends all match actual filings. Updated §13 milestone status. Known minor data gap (not blocking): a few Apple-specific tags missing from items.yaml (D&A combined, post-2023 interest expense) — items.yaml-only fix when needed. |
+| 2026-05-20 | 0.14    | **In-progress fiscal year support.** §5.1 period coverage now reads as "5 completed years + in-progress year's filed quarters." `discover_quarters_to_extract` finds the most recent fy with 10-Qs but no 10-K and adds its filed Q1/Q2/Q3 rows. Q4 of the in-progress year is correctly omitted (no 10-K to derive from). Verified against AAPL: output is now 22 rows (FY2021–FY2025 + FY2026 Q1 & Q2 = $143.8B / $111.2B, matching Apple's actual 10-Q filings). |

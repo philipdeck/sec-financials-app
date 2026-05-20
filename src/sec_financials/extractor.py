@@ -116,6 +116,58 @@ def discover_recent_fiscal_years(facts: CompanyFacts, n: int = 5) -> list[int]:
     return sorted(years, reverse=True)[:n]
 
 
+def discover_quarters_to_extract(
+    facts: CompanyFacts, n_completed: int = 5
+) -> list[tuple[int, str]]:
+    """List of (fiscal_year, fiscal_quarter) tuples to extract, oldest first.
+
+    Includes:
+      - The `n_completed` most recent fiscal years that have a 10-K filed
+        — each with Q1, Q2, Q3, Q4.
+      - At most one in-progress fiscal year (the most recent year that
+        has 10-Q filings but no 10-K yet) — only the quarters that have
+        actually been filed (Q1, Q2, and/or Q3). Q4 is omitted because
+        there's no 10-K from which to derive it.
+    """
+    completed_years: set[int] = set()
+    in_progress_quarters: dict[int, set[str]] = {}
+
+    for tag in _FISCAL_YEAR_PROBE_TAGS:
+        for f in facts.facts_for(tag):
+            if f.fiscal_year <= 0:
+                continue
+            if f.form in ("10-K", "10-K/A") and f.fiscal_period == "FY":
+                completed_years.add(f.fiscal_year)
+            elif (
+                f.form in ("10-Q", "10-Q/A")
+                and f.fiscal_period in ("Q1", "Q2", "Q3")
+            ):
+                in_progress_quarters.setdefault(f.fiscal_year, set()).add(
+                    f.fiscal_period
+                )
+
+    selected_completed = sorted(completed_years, reverse=True)[:n_completed]
+
+    # In-progress year: max fy with 10-Q filings but no 10-K. We only
+    # include ONE such year — issuers don't typically lag multiple years
+    # behind, and including more would muddy the output.
+    in_progress_year: int | None = None
+    for fy in sorted(in_progress_quarters.keys(), reverse=True):
+        if fy not in completed_years:
+            in_progress_year = fy
+            break
+
+    quarters: list[tuple[int, str]] = []
+    for fy in sorted(selected_completed):
+        for q in ("Q1", "Q2", "Q3", "Q4"):
+            quarters.append((fy, q))
+    if in_progress_year is not None:
+        for q in ("Q1", "Q2", "Q3"):
+            if q in in_progress_quarters[in_progress_year]:
+                quarters.append((in_progress_year, q))
+    return quarters
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Low-level fact selection
 # ──────────────────────────────────────────────────────────────────────────
@@ -428,35 +480,49 @@ def extract_quarterly(
     fiscal_years: Sequence[int] | None = None,
     n_years: int = 5,
 ) -> list[QuarterRow]:
-    """Build per-quarter rows for every item over the last `n_years` years.
+    """Build per-quarter rows for every item.
 
     Args:
         facts: Parsed companyfacts for one issuer.
         items: The items to extract (one column per item).
         ticker: Echoed into each row.
-        fiscal_years: Explicit list of fiscal years. If None, discovered
-            from the issuer's filings.
-        n_years: How many recent years to discover when `fiscal_years` is
-            None. Ignored otherwise.
+        fiscal_years: Explicit list of fiscal years to extract (each gets
+            Q1-Q4). If None, the year list is discovered from the issuer's
+            filings — includes the n_years most recent completed years
+            plus any in-progress year's actually-filed quarters.
+        n_years: How many recent completed years to discover when
+            `fiscal_years` is None. Ignored otherwise.
 
     Returns:
-        Rows sorted oldest → newest, four quarters per fiscal year.
+        Rows sorted oldest → newest. Completed years contribute four rows
+        each (Q1-Q4). An in-progress year contributes only the filed
+        quarters (Q1, Q2, and/or Q3).
     """
     if fiscal_years is None:
-        fiscal_years = discover_recent_fiscal_years(facts, n=n_years)
-    years_asc = sorted(set(fiscal_years))
+        quarters = discover_quarters_to_extract(facts, n_completed=n_years)
+    else:
+        # Caller-provided explicit year list — each year gets all 4 quarters.
+        quarters = [
+            (fy, q)
+            for fy in sorted(set(fiscal_years))
+            for q in ("Q1", "Q2", "Q3", "Q4")
+        ]
+
+    # Group by year so Q4 derivation has access to Q1-Q3 priors for the
+    # same fiscal year. `dict` preserves insertion order, so iterating
+    # gives years oldest-first (matches the order in `quarters`).
+    quarters_by_year: dict[int, list[str]] = {}
+    for fy, fq in quarters:
+        quarters_by_year.setdefault(fy, []).append(fq)
 
     rows: list[QuarterRow] = []
 
-    for fy in years_asc:
-        # We resolve quarters in order so that Q4 derivations can reference
-        # Q1–Q3 values for each tag.
-        # Layout: per_item_quarter[item.key][fq] = ExtractedValue
+    for fy, year_quarters in quarters_by_year.items():
         per_item_quarter: dict[str, dict[str, ExtractedValue]] = {
             i.key: {} for i in items
         }
 
-        for fq in ("Q1", "Q2", "Q3", "Q4"):
+        for fq in year_quarters:
             row_period_end: date | None = None
             row_values: dict[str, ExtractedValue] = {}
 
