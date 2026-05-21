@@ -11,7 +11,8 @@ services:
     runtime: python
     plan: free
     region: oregon                     # US-East / Ohio also available; Oregon is the default
-    pythonVersion: "3.12.7"            # Stable, broadly supported; matches runtime.txt
+    # Python version pinned via `runtime.txt` at repo root (`python-3.12.7`).
+    # Render's blueprint schema doesn't accept `pythonVersion` directly.
     buildCommand: pip install --upgrade pip && pip install .
     startCommand: uvicorn sec_financials.web:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /healthz
