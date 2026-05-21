@@ -134,7 +134,7 @@ _PAGE_TEMPLATE = """<!doctype html>
 <body>
     <main>
         <h1>SEC Financials Extractor</h1>
-        <p class="subtitle">Enter a US ticker. Get a CSV (plus sources sidecar) zipped for download.</p>
+        <p class="subtitle">Enter a US ticker. Get a CSV (plus sources sidecar) zipped for download. <em>Values are in millions of the reported unit.</em></p>
 
         {error_block}
 

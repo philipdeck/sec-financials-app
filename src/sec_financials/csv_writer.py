@@ -21,14 +21,29 @@ from sec_financials.config import Item
 from sec_financials.extractor import QuarterRow
 
 
+_MILLIONS = 1_000_000
+
+
 def _format_value(v: float | None) -> str:
-    """Render a numeric value as a raw integer/float string, blank if None."""
+    """Render a numeric value in MILLIONS of the reported unit, blank if None.
+
+    SEC values are filed as raw whole numbers (e.g. $111,439,000,000). We
+    divide by 1,000,000 for the output so the CSV reads as
+    `111439` (= $111.4 billion) rather than `111439000000`. This applies to
+    both USD- and shares-unit columns — both benefit from compact display.
+
+    Trailing zeros and trailing decimal point are stripped; integer
+    millions render without a fractional part.
+    """
     if v is None:
         return ""
-    # Whole-cent integer values are common; render without decimals.
-    if v == int(v):
-        return str(int(v))
-    return f"{v:.6f}".rstrip("0").rstrip(".")
+    v_m = v / _MILLIONS
+    if v_m == 0:
+        return "0"
+    if v_m == int(v_m):
+        return str(int(v_m))
+    # Up to 6 decimal places (= dollar resolution), strip trailing zeros.
+    return f"{v_m:.6f}".rstrip("0").rstrip(".")
 
 
 def build_main_csv(rows: Sequence[QuarterRow], items: Sequence[Item]) -> str:
