@@ -1,6 +1,6 @@
 # SEC Financials Extractor — Requirements
 
-**Status:** Draft v0.14
+**Status:** Draft v0.15
 **Owner:** pdeck
 **Last updated:** 2026-05-19
 **Repository:** _TBD (to be created on GitHub)_
@@ -433,9 +433,15 @@ The deployed app must operate with **no Claude / LLM involvement at runtime**.
    `equity_change`) work across both flow and stock. Verified against AAPL
    FY2024: total assets, debt, retained earnings, CFO, capex, dividends,
    and the ~$95B buyback all match Apple's actual filings.
-4. **M3 — Web UI:** form + download button on a deployed URL.
-5. **M4 — Hardening:** error handling, rate limiting, caching, CI.
-6. **M5 — v1 release:** documented, deployed, public URL shared.
+4. **M3 — Web UI:** _Complete (local)._ FastAPI app at
+   `src/sec_financials/web.py` serves a single server-rendered HTML page
+   with a ticker form. POST returns the zip directly as a
+   `Content-Disposition: attachment` download. Run locally with
+   `sec-financials serve`. Deploy to Render is M5.
+5. **M4 — Hardening:** error handling polish, rate limiting per §11,
+   request-level caching of SEC responses, GitHub Actions CI.
+6. **M5 — v1 release:** push to GitHub, configure Render service, point
+   `projects.extuple.com` CNAME, smoke-test the public URL.
 
 ## 14. Open Questions (consolidated)
 
@@ -460,3 +466,4 @@ be added here as implementation surfaces them.
 | 2026-05-19 | 0.12    | Subdomain locked: **`projects.extuple.com`** as a personal-tools umbrella. Documented the multi-project-future implication (path-prefix vs sub-subdomain) for if another project ships under the same umbrella later — decision deferred until needed. **All initial spec open questions resolved.** |
 | 2026-05-20 | 0.13    | **M2 complete.** Extractor now handles balance sheet (stock items via point-in-time XBRL contexts: no duration filter, Q4 balance pulled from 10-K with fp=FY) and cash flow (YTD-subtraction: Q2 = 6mo − 3mo, Q3 = 9mo − 6mo). Verified against AAPL FY2024: total assets / debt / retained earnings / CFO / capex / dividends all match actual filings. Updated §13 milestone status. Known minor data gap (not blocking): a few Apple-specific tags missing from items.yaml (D&A combined, post-2023 interest expense) — items.yaml-only fix when needed. |
 | 2026-05-20 | 0.14    | **In-progress fiscal year support.** §5.1 period coverage now reads as "5 completed years + in-progress year's filed quarters." `discover_quarters_to_extract` finds the most recent fy with 10-Qs but no 10-K and adds its filed Q1/Q2/Q3 rows. Q4 of the in-progress year is correctly omitted (no 10-K to derive from). Verified against AAPL: output is now 22 rows (FY2021–FY2025 + FY2026 Q1 & Q2 = $143.8B / $111.2B, matching Apple's actual 10-Q filings). |
+| 2026-05-21 | 0.15    | **M3 complete (local).** New `src/sec_financials/web.py` exposes a FastAPI app with two routes: `GET /` renders a single server-rendered HTML form (no JS framework, vanilla CSS, ~150 lines total), `POST /` runs the same extraction pipeline the CLI uses and returns the zip as a download. New `sec-financials serve` subcommand runs uvicorn locally. CLI restructured to use subcommands (`extract` / `serve`) with backward-compat: `sec-financials AAPL` still works (auto-injects `extract`). Shared pipeline extracted to `pipeline.py` so CLI and web stay in sync. 7 new tests via FastAPI TestClient (form rendering, success zip download, error re-rendering, ticker normalization, healthz). Suite is now 49 passing. Deploy to Render still pending (M5). |

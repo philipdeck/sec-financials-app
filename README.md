@@ -6,7 +6,7 @@ directly from SEC EDGAR for a given US stock ticker and emits a tidy CSV.
 Source of truth for behavior: [`REQUIREMENTS.md`](REQUIREMENTS.md).
 Field list (editable): [`config/items.yaml`](config/items.yaml).
 
-## Quick start (CLI, M1)
+## Quick start
 
 ```powershell
 # 1. Clone the repo and enter it
@@ -21,14 +21,24 @@ pip install -e ".[dev]"
 # 3. Configure your SEC User-Agent (required by SEC fair-access policy)
 copy .env.example .env
 # Edit .env and replace the example email with your own
-
-# 4. Run
-sec-financials AAPL
 ```
 
-This writes `AAPL_financials_YYYYMMDD.zip` to the current directory.
-The zip contains the main wide-format CSV plus a long-format sources
-sidecar.
+### Run as a web app
+
+```powershell
+sec-financials serve
+# Open http://127.0.0.1:8000/ in your browser, type a ticker, click Generate
+```
+
+### Run as a one-shot CLI
+
+```powershell
+sec-financials AAPL                  # equivalent to: sec-financials extract AAPL
+sec-financials extract MSFT --out .\out
+```
+
+Either entry point produces `{TICKER}_financials_YYYYMMDD.zip`, containing
+the wide-format main CSV plus the long-format sources sidecar.
 
 ## Project layout
 

@@ -129,6 +129,38 @@ def build_sources_csv(rows: Sequence[QuarterRow], items: Sequence[Item]) -> str:
     return buf.getvalue()
 
 
+def build_zip_bytes(
+    rows: Sequence[QuarterRow],
+    items: Sequence[Item],
+    ticker: str,
+    *,
+    today: datetime | None = None,
+) -> tuple[bytes, str]:
+    """Build the main+sidecar zip in memory and return (bytes, filename).
+
+    Used by both the CLI (which writes to disk) and the web UI (which
+    streams the bytes as a download). No filesystem side effects.
+    """
+    today = today or datetime.now(UTC)
+    date_stamp = today.strftime("%Y%m%d")
+    ticker_up = ticker.upper()
+
+    main_name = f"{ticker_up}_financials_{date_stamp}.csv"
+    sidecar_name = f"{ticker_up}_sources_{date_stamp}.csv"
+    zip_name = f"{ticker_up}_financials_{date_stamp}.zip"
+
+    main_csv = build_main_csv(rows, items)
+    sidecar_csv = build_sources_csv(rows, items)
+
+    # UTF-8 with BOM, per REQUIREMENTS.md §5.3 (Excel-friendly).
+    bom = "﻿"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(main_name, (bom + main_csv).encode("utf-8"))
+        zf.writestr(sidecar_name, (bom + sidecar_csv).encode("utf-8"))
+    return buf.getvalue(), zip_name
+
+
 def write_zip(
     rows: Sequence[QuarterRow],
     items: Sequence[Item],
@@ -139,26 +171,11 @@ def write_zip(
 ) -> Path:
     """Write the main + sidecar CSVs to a zip file in `out_dir`.
 
-    Returns the path to the created zip.
+    Returns the path to the created zip. Thin wrapper around
+    `build_zip_bytes` for the CLI.
     """
-    today = today or datetime.now(UTC)
-    date_stamp = today.strftime("%Y%m%d")
-    ticker_up = ticker.upper()
-
-    main_name = f"{ticker_up}_financials_{date_stamp}.csv"
-    sidecar_name = f"{ticker_up}_sources_{date_stamp}.csv"
-    zip_name = f"{ticker_up}_financials_{date_stamp}.zip"
-    zip_path = out_dir / zip_name
-
-    main_csv = build_main_csv(rows, items)
-    sidecar_csv = build_sources_csv(rows, items)
-
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # UTF-8 with BOM, per REQUIREMENTS.md §5.3 (Excel-friendly).
-    bom = "﻿"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(main_name, (bom + main_csv).encode("utf-8"))
-        zf.writestr(sidecar_name, (bom + sidecar_csv).encode("utf-8"))
-
+    data, zip_name = build_zip_bytes(rows, items, ticker, today=today)
+    zip_path = out_dir / zip_name
+    zip_path.write_bytes(data)
     return zip_path

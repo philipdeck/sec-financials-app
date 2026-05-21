@@ -1,16 +1,16 @@
 """CLI entry point.
 
 Usage:
-    sec-financials TICKER [--out DIR] [--items PATH]
+    sec-financials TICKER [--out DIR] [--items PATH] [--statement KIND]
+    sec-financials extract TICKER ...    (same as above; explicit form)
+    sec-financials serve [--host HOST] [--port PORT] [--reload]
 
-Produces `{TICKER}_financials_{YYYYMMDD}.zip` in --out (default: cwd),
-containing the main wide-format CSV plus the long-format sources sidecar.
+The bare `sec-financials AAPL` is preserved as a shortcut for
+`sec-financials extract AAPL` — when the first positional doesn't match a
+known subcommand, it's treated as a ticker for the `extract` subcommand.
 
-Requires the SEC_USER_AGENT environment variable. A `.env` file in the
-working directory (or any ancestor) is loaded automatically if present.
-
-M1 scope: income statement items only. Balance sheet and cash flow follow
-in later milestones.
+Both subcommands auto-load `.env` from the working directory (or any
+ancestor) so `SEC_USER_AGENT` doesn't need to be exported manually.
 """
 
 from __future__ import annotations
@@ -20,21 +20,15 @@ import os
 import sys
 from pathlib import Path
 
-from sec_financials.companyfacts import fetch_company_facts
 from sec_financials.config import load_items
-from sec_financials.csv_writer import write_zip
-from sec_financials.extractor import extract_quarterly
-from sec_financials.sec_client import SECClient, SECClientError
-from sec_financials.tickers import TickerResolver
+from sec_financials.pipeline import generate_report
+from sec_financials.sec_client import SECClientError
+
+_SUBCOMMANDS = ("extract", "serve")
 
 
 def _load_dotenv_if_present(start: Path) -> None:
-    """Tiny dotenv-style loader. Searches `start` and its ancestors for `.env`.
-
-    Lines of the form `KEY=value` or `KEY="value"` are set as env vars,
-    only when the key is not already set. Comments and blanks are ignored.
-    Quoted values strip a single pair of matching quotes.
-    """
+    """Tiny dotenv-style loader. Searches `start` and its ancestors for `.env`."""
     for parent in (start, *start.parents):
         candidate = parent / ".env"
         if candidate.is_file():
@@ -62,47 +56,62 @@ def _default_items_path() -> Path:
         candidate = parent / "config" / "items.yaml"
         if candidate.is_file():
             return candidate
-    return cwd / "config" / "items.yaml"  # will FileNotFoundError downstream
+    return cwd / "config" / "items.yaml"
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="sec-financials",
         description=(
             "Pull quarterly financial statement data from SEC EDGAR for a "
-            "US stock ticker and write a CSV (plus sources sidecar) zip."
+            "US stock ticker (extract) or run the local web UI (serve)."
         ),
     )
-    p.add_argument("ticker", help="US stock ticker (e.g. AAPL, MSFT)")
-    p.add_argument(
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # extract --------------------------------------------------------------
+    ex = sub.add_parser(
+        "extract", help="One-shot CSV generation for a ticker."
+    )
+    ex.add_argument("ticker", help="US stock ticker (e.g. AAPL, MSFT)")
+    ex.add_argument(
         "--out",
         type=Path,
         default=Path.cwd(),
         help="Output directory for the .zip (default: current directory)",
     )
-    p.add_argument(
+    ex.add_argument(
         "--items",
         type=Path,
         default=None,
         help="Path to items.yaml (default: ./config/items.yaml or nearest ancestor)",
     )
-    p.add_argument(
+    ex.add_argument(
         "--statement",
         choices=("income", "balance_sheet", "cash_flow", "all"),
-        default="income",
+        default="all",
         help=(
-            "Restrict to one statement type. M1 default is `income` (income "
-            "statement only). Use `all` to include every item in items.yaml."
+            "Restrict to one statement type. Default is `all` (all 27 items "
+            "across income, balance sheet, cash flow)."
         ),
     )
-    return p
+
+    # serve ----------------------------------------------------------------
+    sv = sub.add_parser(
+        "serve", help="Run the local web UI on http://localhost:PORT/"
+    )
+    sv.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    sv.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+    sv.add_argument(
+        "--reload",
+        action="store_true",
+        help="Reload on code changes (dev only).",
+    )
+
+    return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    _load_dotenv_if_present(Path.cwd())
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-
+def _cmd_extract(args: argparse.Namespace) -> int:
     items_path = args.items or _default_items_path()
     try:
         items_config = load_items(items_path)
@@ -110,54 +119,74 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    if args.statement == "all":
-        items = items_config.items
-    else:
-        items = items_config.by_statement(args.statement)
-
-    if not items:
-        print(
-            f"error: no items found for statement={args.statement!r} in {items_path}",
-            file=sys.stderr,
-        )
-        return 2
-
     try:
-        with SECClient() as client:
-            resolver = TickerResolver(client)
-            try:
-                company = resolver.resolve(args.ticker)
-            except SECClientError as e:
-                print(f"error: {e}", file=sys.stderr)
-                return 1
-
-            print(
-                f"Resolved {company.ticker} → CIK {company.cik} ({company.title})",
-                file=sys.stderr,
-            )
-
-            facts = fetch_company_facts(client, company.cik_padded)
-            print(
-                f"Fetched companyfacts for {facts.entity_name or company.title}",
-                file=sys.stderr,
-            )
-
-            rows = extract_quarterly(facts, items, ticker=company.ticker)
-            if not rows:
-                print(
-                    "error: no fiscal years discovered — the issuer may not have "
-                    "filed an XBRL 10-K, or the SEC mapping is empty",
-                    file=sys.stderr,
-                )
-                return 1
-
-            zip_path = write_zip(rows, items, ticker=company.ticker, out_dir=args.out)
+        report = generate_report(
+            args.ticker,
+            items_config,
+            statement=args.statement,
+        )
     except SECClientError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
+    if report.row_count == 0:
+        print(
+            "error: no fiscal years discovered — the issuer may not have "
+            "filed an XBRL 10-K, or the SEC mapping is empty",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        f"Resolved {report.ticker} → CIK {report.cik} ({report.entity_name})",
+        file=sys.stderr,
+    )
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    zip_path = args.out / report.zip_filename
+    zip_path.write_bytes(report.zip_bytes)
     print(zip_path)
     return 0
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    # Import here so `extract` callers don't pay for FastAPI/uvicorn import.
+    import uvicorn
+
+    uvicorn.run(
+        "sec_financials.web:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level="info",
+    )
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    _load_dotenv_if_present(Path.cwd())
+
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # Backward-compat: `sec-financials AAPL` -> `sec-financials extract AAPL`.
+    # If the first positional isn't a known subcommand and isn't a flag,
+    # inject `extract` as the implicit subcommand.
+    if argv and not argv[0].startswith("-") and argv[0] not in _SUBCOMMANDS:
+        argv = ["extract", *argv]
+
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.cmd == "extract":
+        return _cmd_extract(args)
+    if args.cmd == "serve":
+        return _cmd_serve(args)
+    parser.error(f"unknown command: {args.cmd!r}")
+    return 2  # unreachable but keeps mypy quiet
 
 
 if __name__ == "__main__":
