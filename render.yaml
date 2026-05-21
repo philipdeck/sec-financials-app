@@ -1,0 +1,27 @@
+# Render blueprint — declarative spec for the production service.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# When this file is in the repo root, Render's "Blueprints" feature can
+# create the service in one click. Equivalent settings can also be entered
+# manually via Render's dashboard if a Blueprint isn't used.
+
+services:
+  - type: web
+    name: sec-financials
+    runtime: python
+    plan: free
+    region: oregon                     # US-East / Ohio also available; Oregon is the default
+    pythonVersion: "3.12.7"            # Stable, broadly supported; matches runtime.txt
+    buildCommand: pip install --upgrade pip && pip install .
+    startCommand: uvicorn sec_financials.web:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /healthz
+    autoDeploy: true                   # Deploy on every push to the connected branch
+    envVars:
+      # SEC fair-access policy requires a descriptive User-Agent with a
+      # real contact email. The value is set manually in Render's dashboard
+      # (Environment tab) rather than committed here — `sync: false` tells
+      # Blueprint imports to leave it blank for the user to fill in.
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: PYTHONUNBUFFERED
+        value: "1"

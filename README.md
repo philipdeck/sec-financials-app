@@ -59,6 +59,22 @@ ruff format .
 pytest
 ```
 
+## Deployment (Render)
+
+The repo is set up for one-click deploy to [Render](https://render.com) via
+the included `render.yaml` blueprint. Two pieces have to be supplied
+manually:
+
+1. **`SEC_USER_AGENT` env var** — set in the Render service's Environment
+   tab (a descriptive User-Agent with a real contact email, per SEC fair-
+   access policy).
+2. **DNS CNAME for `projects.extuple.com`** — added at your registrar,
+   pointing at the Render service URL. The apex `extuple.com` (used for
+   email) stays untouched.
+
+Detailed step-by-step is in `REQUIREMENTS.md` §8. Pushes to `main` trigger
+auto-deploys.
+
 ## Constraints
 
 - **SEC EDGAR is the only external API.** No paid data aggregators.
