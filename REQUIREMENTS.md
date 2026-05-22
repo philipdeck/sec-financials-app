@@ -1,6 +1,6 @@
 # SEC Financials Extractor — Requirements
 
-**Status:** Draft v0.17
+**Status:** v1.0 — Shipped
 **Owner:** pdeck
 **Last updated:** 2026-05-19
 **Repository:** _TBD (to be created on GitHub)_
@@ -441,8 +441,14 @@ The deployed app must operate with **no Claude / LLM involvement at runtime**.
    `sec-financials serve`. Deploy to Render is M5.
 5. **M4 — Hardening:** error handling polish, rate limiting per §11,
    request-level caching of SEC responses, GitHub Actions CI.
-6. **M5 — v1 release:** push to GitHub, configure Render service, point
-   `projects.extuple.com` CNAME, smoke-test the public URL.
+   _Deferred — not blocking daily use._
+6. **M5 — v1 release:** _Complete._ Repo on GitHub at
+   `github.com/philipdeck/sec-financials-app`. Service on Render free
+   tier, auto-deploying on push to `main`. Custom domain
+   **`https://projects.extuple.com/`** live with Let's Encrypt SSL.
+   GoDaddy CNAME `projects` → `sec-financials.onrender.com`. End-to-end
+   verified: AAPL submission returns a 9.9KB zip with all 27 columns,
+   split-adjusted share counts, and source traceability sidecar.
 
 ## 14. Open Questions (consolidated)
 
@@ -470,3 +476,6 @@ be added here as implementation surfaces them.
 | 2026-05-21 | 0.15    | **M3 complete (local).** New `src/sec_financials/web.py` exposes a FastAPI app with two routes: `GET /` renders a single server-rendered HTML form (no JS framework, vanilla CSS, ~150 lines total), `POST /` runs the same extraction pipeline the CLI uses and returns the zip as a download. New `sec-financials serve` subcommand runs uvicorn locally. CLI restructured to use subcommands (`extract` / `serve`) with backward-compat: `sec-financials AAPL` still works (auto-injects `extract`). Shared pipeline extracted to `pipeline.py` so CLI and web stay in sync. 7 new tests via FastAPI TestClient (form rendering, success zip download, error re-rendering, ticker normalization, healthz). Suite is now 49 passing. Deploy to Render still pending (M5). |
 | 2026-05-21 | 0.16    | **M5 prep.** Added `render.yaml` blueprint (free plan, oregon region, Python 3.12.7, `/healthz` health check, `SEC_USER_AGENT` declared as a dashboard-set secret) and `runtime.txt`. Build command is `pip install .` (no dev extras in production); start command is `uvicorn sec_financials.web:app --host 0.0.0.0 --port $PORT --workers 1`. README updated with deploy steps. Verified the prod-equivalent start command locally: NVDA form submission returns an 8.8KB zip with all 27 columns. Remaining M5 steps are user-driven: push to GitHub, create Render service, configure DNS CNAME for `projects.extuple.com`. |
 | 2026-05-21 | 0.17    | **Values now emitted in millions.** Per user request, all numeric values in the main CSV and sources sidecar are divided by 1,000,000 before output. `111,439,000,000` → `111439`; `5,157,787,000` → `5157.787`. Trailing zeros and the trailing decimal point are stripped. Applies uniformly to USD and shares-unit items. Web form subtitle updated to note this. |
+| 2026-05-22 | 0.18    | **NVDA gaps filled (D&A, capex, interest).** items.yaml: added `DepreciationDepletionAndAmortization` / `DepreciationAndAmortization` to depreciation fallback; `PaymentsToAcquireProductiveAssets` / `PaymentsForCapitalImprovements` to capex; `InterestExpenseNonoperating` to interest_expense. Extractor: same-tag preference for Q4 derivation (prevents mixing pure-D annual with combined-D&A quarterly when issuers tag inconsistently across years). |
+| 2026-05-22 | 0.19    | **Stock-split back-adjustment.** New module `src/sec_financials/splits.py` detects clean split ratios (2,3,4,5,6,7,8,10 and reciprocals for reverse) in any item with `unit==shares` and back-adjusts all earlier periods by the cumulative multiplier. Verified against NVDA's two splits (4:1 in 2021 and 10:1 in 2024): pre-fix `shares_diluted` jumped from 632M → 2,500M → 24,500M across the history; post-fix it reads flat at ~25,000M. Adjusted rows get a `split-adjusted` marker in the notes column; source sidecar audit trail is unchanged. |
+| 2026-05-22 | v1.0    | **Shipped.** Public service live at https://projects.extuple.com/. Render free tier, Let's Encrypt SSL, GoDaddy CNAME on `projects` subdomain pointing at `sec-financials.onrender.com`. Apex `extuple.com` and email MX records untouched. Auto-deploy from `main` on GitHub. M4 hardening (rate limit, request caching, CI) deferred — not blocking daily use; can land any time. |
