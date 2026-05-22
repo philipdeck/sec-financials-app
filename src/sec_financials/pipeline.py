@@ -15,6 +15,7 @@ from sec_financials.config import Item, ItemsConfig
 from sec_financials.csv_writer import build_zip_bytes
 from sec_financials.extractor import extract_quarterly
 from sec_financials.sec_client import SECClient
+from sec_financials.splits import adjust_for_splits
 from sec_financials.tickers import TickerResolver
 
 
@@ -62,6 +63,9 @@ def generate_report(
         company = resolver.resolve(ticker)
         facts = fetch_company_facts(client, company.cik_padded)
         rows = extract_quarterly(facts, items, ticker=company.ticker)
+        # Retroactively split-adjust share-count items so historical
+        # values are comparable to today's post-split share base.
+        adjust_for_splits(rows, items)
         zip_bytes, zip_name = build_zip_bytes(rows, items, ticker=company.ticker)
         return GeneratedReport(
             ticker=company.ticker,
