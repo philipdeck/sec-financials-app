@@ -613,10 +613,13 @@ def _extract_for_item(
     # switched concept tags mid-history, e.g. ASC 606).
     if fiscal_quarter == "Q4":
         cross_tag_priors: dict[str, float] = {}
+        prior_tags: set[str] = set()
         for q in ("Q1", "Q2", "Q3"):
             ev = prior_per_item.get(item.key, {}).get(q)
             if ev is not None and ev.value is not None:
                 cross_tag_priors[q] = ev.value
+                if ev.sources:
+                    prior_tags.add(ev.sources[0].tag)
         if len(cross_tag_priors) < 3:
             return (
                 None,
@@ -624,7 +627,20 @@ def _extract_for_item(
                 [],
                 f"{item.key}: can't derive Q4, Q1-Q3 not all resolved",
             )
-        for tag in item.xbrl_tags:
+
+        # Prefer the annual under the tag that produced Q1-Q3. Mixing tag
+        # concepts (e.g. pure Depreciation annual minus combined-D&A
+        # quarterly) yields misleading Q4 values. If Q1-Q3 came from a
+        # single tag, try it first; otherwise iterate the full fallback.
+        if len(prior_tags) == 1:
+            preferred = next(iter(prior_tags))
+            tag_order = [preferred] + [
+                t for t in item.xbrl_tags if t != preferred
+            ]
+        else:
+            tag_order = list(item.xbrl_tags)
+
+        for tag in tag_order:
             if not facts.has_tag(tag):
                 continue
             annual = _annual_value(facts, tag, fiscal_year, unit)

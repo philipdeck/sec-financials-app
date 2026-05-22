@@ -160,6 +160,50 @@ def _annual_fact(tag: str, val: float, fy: int, end: date) -> Fact:
     )
 
 
+def test_q4_uses_tag_that_resolved_q1_q3_when_multiple_have_annual():
+    """When fallback tag B resolves Q1-Q3 but tag A also has annual data,
+    Q4 derivation should prefer tag B's annual to keep concepts consistent.
+
+    Models the NVIDIA case: pure `Depreciation` is filed annually only;
+    quarterly facts only come from `DepreciationDepletionAndAmortization`.
+    """
+    fy = 2024
+    # Tag A: only annual filings (no quarterly). Different value from tag B.
+    a_annual = _annual_fact("PureDep", 2400, fy, date(2024, 9, 30))
+    # Tag B: quarterly + annual. Dates align with _quarter_fact helper.
+    b_q1 = _quarter_fact("DDA", 611, fy, "Q1", date(2023, 12, 30))
+    b_q2 = _quarter_fact("DDA", 669, fy, "Q2", date(2024, 3, 30))
+    b_q3 = _quarter_fact("DDA", 751, fy, "Q3", date(2024, 6, 29))
+    b_annual = _annual_fact("DDA", 2843, fy, date(2024, 9, 30))
+
+    facts = _make_facts(
+        facts_by_tag_unit={
+            ("PureDep", "USD"): [a_annual],
+            ("DDA", "USD"): [b_q1, b_q2, b_q3, b_annual],
+        }
+    )
+
+    item = Item(
+        key="depreciation",
+        display_name="Depreciation",
+        statement="cash_flow",
+        flow_or_stock="flow",
+        unit="USD",
+        # Pure-D listed first (preferred), DDA as fallback.
+        xbrl_tags=("PureDep", "DDA"),
+    )
+
+    rows = extract_quarterly(facts, [item], ticker="TEST", fiscal_years=[fy])
+    by_q = {r.fiscal_quarter: r.values["depreciation"].value for r in rows}
+    # Q1-Q3 must use DDA (since PureDep has no quarterly facts).
+    assert by_q["Q1"] == 611
+    assert by_q["Q2"] == 669
+    assert by_q["Q3"] == 751
+    # Q4 must use DDA's annual (2843) − (611+669+751), NOT PureDep's annual (2400).
+    # If we mixed, Q4 would be 2400 − 2031 = 369 — wrong.
+    assert by_q["Q4"] == 2843 - 611 - 669 - 751  # = 812
+
+
 def test_q4_derives_across_tag_transition():
     """Q1-Q3 reported under old tag, FY 10-K under new tag → Q4 still derives."""
     fy = 2024

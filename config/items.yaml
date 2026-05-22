@@ -234,13 +234,17 @@ items:
     statement: cash_flow
     flow_or_stock: flow
     unit: USD
-    # Split from amortization where possible. Many filers only report a
-    # combined `DepreciationDepletionAndAmortization` figure — in that
-    # case this column will be blank and the combined value (if useful)
-    # would need to be added as its own item later.
+    # Split from amortization where possible. Pure-D tags are tried first;
+    # the combined-D&A fallback (DepreciationDepletionAndAmortization, used
+    # by Apple, NVIDIA, many others) kicks in only when no pure quarterly
+    # depreciation is reported. For those filers this column will contain
+    # combined D+A — the sources sidecar records which tag was used so
+    # readers can distinguish.
     xbrl_tags:
       - Depreciation
       - DepreciationNonproduction
+      - DepreciationDepletionAndAmortization
+      - DepreciationAndAmortization
 
   - key: amortization
     display_name: Amortization
@@ -265,9 +269,12 @@ items:
     statement: cash_flow
     flow_or_stock: flow
     unit: USD
-    # Reported as a cash outflow (negative) in most filings.
+    # Reported as a cash outflow (positive value in the source; the SEC
+    # convention is "payments" tags carry the absolute cash outflow).
     xbrl_tags:
       - PaymentsToAcquirePropertyPlantAndEquipment
+      - PaymentsToAcquireProductiveAssets        # used by NVIDIA, some others
+      - PaymentsForCapitalImprovements
 
   - key: cash_from_operations
     display_name: Operating Cash Flow
