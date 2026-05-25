@@ -295,6 +295,33 @@ def _ytd_value(
     )
 
 
+def _has_later_ytd_evidence(
+    facts: CompanyFacts, tag: str, fiscal_year: int, unit: str = "USD"
+) -> bool:
+    """Return True if the issuer reported a Q2 6mo or Q3 9mo YTD for the tag.
+
+    Used by Q1 lookup to decide whether a missing Q1 fact should be
+    inferred as 0 (filer omitted the line item because the value was
+    zero, but reported it cumulatively later) or stay None (filer
+    doesn't actually report this concept quarterly — let the fallback
+    try other tags).
+
+    We deliberately do NOT count the annual (FY) fact here: an annual
+    without any intermediate YTDs means the issuer files this concept
+    only on the 10-K, in which case the "Q1 was zero, just untagged"
+    inference doesn't apply.
+    """
+    candidates = facts.facts_for(tag, unit)
+    for f in candidates:
+        if f.fiscal_year != fiscal_year:
+            continue
+        if f.fiscal_period == "Q2" and f.duration_days is not None and 160 <= f.duration_days <= 200:
+            return True
+        if f.fiscal_period == "Q3" and f.duration_days is not None and 250 <= f.duration_days <= 290:
+            return True
+    return False
+
+
 def _balance_value(
     facts: CompanyFacts,
     tag: str,
@@ -361,37 +388,49 @@ def _resolve_flow_tag_quarter(
         # YTD-only in 10-Qs (no 3-month column).
         if fiscal_quarter == "Q1":
             # Q1 YTD == 3-month standalone == Q1 value. If 3-month direct
-            # missed, there's no useful YTD fallback at Q1.
+            # missed, infer Q1 = 0 when there is YTD evidence for this tag
+            # later in the year (Q2 6mo, Q3 9mo, or annual). XBRL filers
+            # commonly omit a Q1 fact when it's zero. Without this, the
+            # missing Q1 cascades and prevents Q2/Q3/Q4 from being derived
+            # for the same tag.
+            if _has_later_ytd_evidence(facts, tag, fiscal_year, unit):
+                return 0.0, [], None, ""
             return None, [], None, ""
 
         if fiscal_quarter == "Q2":
             ytd_6mo = _ytd_value(facts, tag, fiscal_year, "Q2", months=6, unit=unit)
-            ytd_3mo = _ytd_value(facts, tag, fiscal_year, "Q1", months=3, unit=unit)
-            if ytd_6mo is None or ytd_3mo is None:
+            if ytd_6mo is None:
                 return None, [], None, ""
+            ytd_3mo = _ytd_value(facts, tag, fiscal_year, "Q1", months=3, unit=unit)
+            ytd_3mo_val = ytd_3mo.val if ytd_3mo is not None else 0.0
+            ytd_3mo_sources = (
+                [_src_from_fact(ytd_3mo, "Q2 derived = 6mo YTD − 3mo YTD")]
+                if ytd_3mo is not None else []
+            )
             return (
-                ytd_6mo.val - ytd_3mo.val,
-                [
-                    _src_from_fact(ytd_6mo, "Q2 derived = 6mo YTD − 3mo YTD"),
-                    _src_from_fact(ytd_3mo, "Q2 derived = 6mo YTD − 3mo YTD"),
-                ],
+                ytd_6mo.val - ytd_3mo_val,
+                [_src_from_fact(ytd_6mo, "Q2 derived = 6mo YTD − 3mo YTD"),
+                 *ytd_3mo_sources],
                 ytd_6mo.end,
-                "",
+                "" if ytd_3mo is not None else "Q1 untagged, inferred 0",
             )
 
         # Q3
         ytd_9mo = _ytd_value(facts, tag, fiscal_year, "Q3", months=9, unit=unit)
-        ytd_6mo = _ytd_value(facts, tag, fiscal_year, "Q2", months=6, unit=unit)
-        if ytd_9mo is None or ytd_6mo is None:
+        if ytd_9mo is None:
             return None, [], None, ""
+        ytd_6mo = _ytd_value(facts, tag, fiscal_year, "Q2", months=6, unit=unit)
+        ytd_6mo_val = ytd_6mo.val if ytd_6mo is not None else 0.0
+        ytd_6mo_sources = (
+            [_src_from_fact(ytd_6mo, "Q3 derived = 9mo YTD − 6mo YTD")]
+            if ytd_6mo is not None else []
+        )
         return (
-            ytd_9mo.val - ytd_6mo.val,
-            [
-                _src_from_fact(ytd_9mo, "Q3 derived = 9mo YTD − 6mo YTD"),
-                _src_from_fact(ytd_6mo, "Q3 derived = 9mo YTD − 6mo YTD"),
-            ],
+            ytd_9mo.val - ytd_6mo_val,
+            [_src_from_fact(ytd_9mo, "Q3 derived = 9mo YTD − 6mo YTD"),
+             *ytd_6mo_sources],
             ytd_9mo.end,
-            "",
+            "" if ytd_6mo is not None else "Q1+Q2 untagged, inferred 0",
         )
 
     # Q4 — derive from annual − (Q1+Q2+Q3) using supplied priors.

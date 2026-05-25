@@ -323,9 +323,14 @@ items:
     statement: cash_flow
     flow_or_stock: flow
     unit: USD
-    # Net cash from debt financing: issuances minus repayments, both
-    # long-term and short-term. Filers that report only the LT components
-    # will have the ST components missing (treated as zero).
+    # Net cash from debt financing: issuances minus repayments. Includes
+    # long-term, short-term, and a generic `RepaymentsOfDebt` tag used by
+    # filers that don't split repayments by maturity (e.g. NVIDIA).
+    # Missing components contribute zero, so filers using only one
+    # convention are handled cleanly. Double-counting would only occur
+    # if a filer reported BOTH the generic and the LT/ST-specific
+    # repayment tags in the same period — rare in practice (filers
+    # typically use one convention).
     derivation:
       add:
         - ProceedsFromIssuanceOfLongTermDebt
@@ -333,6 +338,7 @@ items:
       subtract:
         - RepaymentsOfLongTermDebt
         - RepaymentsOfShortTermDebt
+        - RepaymentsOfDebt                 # generic — used by NVIDIA
 
   - key: equity_change
     display_name: Net Equity Change

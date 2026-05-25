@@ -418,6 +418,53 @@ def test_q2_flow_ytd_subtraction_when_no_3mo():
     assert by_q["Q2"] == 150  # 250 − 100
 
 
+def test_q1_inferred_zero_when_untagged_but_ytd_exists():
+    """SEC filers commonly omit a Q1 fact when the value is zero, while
+    still tagging the later cumulative YTDs. Without inference, Q2/Q3/Q4
+    fail to derive. With inference: Q1 -> 0, downstream quarters resolve.
+    """
+    fy = 2024
+    fy_start = date(2023, 10, 1)
+    # No Q1 fact at all. Q2 6mo YTD = 100; Q3 9mo YTD = 100; FY = 100.
+    # Means the issuer had $100M of activity in Q2, $0 in Q1/Q3/Q4.
+    q2_ytd = _fact(tag="RepDebt", val=100, end=date(2024, 3, 31), start=fy_start,
+                   fy=fy, fp="Q2", form="10-Q")
+    q3_ytd = _fact(tag="RepDebt", val=100, end=date(2024, 6, 30), start=fy_start,
+                   fy=fy, fp="Q3", form="10-Q")
+    annual = _fact(tag="RepDebt", val=100, end=date(2024, 9, 30), start=fy_start,
+                   fy=fy, fp="FY", form="10-K")
+    facts = _make_facts(facts_by_tag_unit={("RepDebt", "USD"): [q2_ytd, q3_ytd, annual]})
+
+    item = Item(key="repdebt", display_name="Repayments", statement="cash_flow",
+                flow_or_stock="flow", unit="USD", xbrl_tags=("RepDebt",))
+    rows = extract_quarterly(facts, [item], ticker="T", fiscal_years=[fy])
+    by_q = {r.fiscal_quarter: r.values["repdebt"].value for r in rows}
+    # All four quarters derivable now: Q1=0, Q2=100, Q3=0, Q4=0.
+    assert by_q["Q1"] == 0
+    assert by_q["Q2"] == 100
+    assert by_q["Q3"] == 0
+    assert by_q["Q4"] == 0
+
+
+def test_q1_not_inferred_when_only_annual_exists():
+    """If a tag has only an annual fact (no Q2/Q3 YTD evidence), don't
+    infer Q1=0 — that case is more likely "filer reports this only at
+    year-end", which the fallback handles by trying other tags.
+    """
+    fy = 2024
+    annual = _annual_fact("AnnualOnly", 1000, fy, date(2024, 9, 30))
+    facts = _make_facts(facts_by_tag_unit={("AnnualOnly", "USD"): [annual]})
+    item = Item(key="x", display_name="X", statement="cash_flow",
+                flow_or_stock="flow", unit="USD", xbrl_tags=("AnnualOnly",))
+    rows = extract_quarterly(facts, [item], ticker="T", fiscal_years=[fy])
+    by_q = {r.fiscal_quarter: r.values["x"].value for r in rows}
+    # Q1 should NOT be inferred as zero. With Q1=None, Q4 also can't derive.
+    assert by_q["Q1"] is None
+    assert by_q["Q2"] is None
+    assert by_q["Q3"] is None
+    assert by_q["Q4"] is None
+
+
 def test_q3_flow_ytd_subtraction():
     """Q3 standalone = 9mo YTD − 6mo YTD."""
     fy = 2024
