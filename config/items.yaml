@@ -48,7 +48,7 @@ items:
       - OtherIncome
 
   - key: cost_of_sales
-    display_name: Cost of Sales
+    display_name: COS
     statement: income
     flow_or_stock: flow
     unit: USD
@@ -58,7 +58,7 @@ items:
       - CostOfGoodsSold
 
   - key: other_cost_of_sales
-    display_name: Other Cost of Sales
+    display_name: Other COS
     statement: income
     flow_or_stock: flow
     unit: USD
@@ -69,7 +69,7 @@ items:
       - OtherCostAndExpenseOperating
 
   - key: operating_expenses
-    display_name: Operating Expenses
+    display_name: Op. Cost
     statement: income
     flow_or_stock: flow
     unit: USD
@@ -80,7 +80,7 @@ items:
       - OperatingCostsAndExpenses
 
   - key: other_costs
-    display_name: Other Costs
+    display_name: OtherCost
     statement: income
     flow_or_stock: flow
     unit: USD
@@ -90,7 +90,7 @@ items:
       - OtherExpenses
 
   - key: interest_expense
-    display_name: Interest Expense
+    display_name: Interest
     statement: income
     flow_or_stock: flow
     unit: USD
@@ -103,7 +103,7 @@ items:
       - InterestExpenseNonoperating         # used by NVIDIA FY2025+ onwards
 
   - key: income_tax_expense
-    display_name: Income Tax Expense
+    display_name: Tax
     statement: income
     flow_or_stock: flow
     unit: USD
@@ -111,7 +111,7 @@ items:
       - IncomeTaxExpenseBenefit
 
   - key: minority_interest
-    display_name: Net Income Attributable to Noncontrolling Interests
+    display_name: Minority Interest
     statement: income
     flow_or_stock: flow
     unit: USD
@@ -131,7 +131,7 @@ items:
       - NetIncomeLossAvailableToCommonStockholdersBasic
 
   - key: shares_diluted
-    display_name: Shares (Diluted Weighted Avg)
+    display_name: Shares
     statement: income
     flow_or_stock: period_avg
     unit: shares
@@ -149,7 +149,7 @@ items:
   # ──────────────────────────────────────────────────────────────────────
 
   - key: cash
-    display_name: Cash & Equivalents
+    display_name: Cash
     statement: balance_sheet
     flow_or_stock: stock
     unit: USD
@@ -159,7 +159,7 @@ items:
       - Cash
 
   - key: investments
-    display_name: Current Marketable Securities
+    display_name: Investments
     statement: balance_sheet
     flow_or_stock: stock
     unit: USD
@@ -202,7 +202,7 @@ items:
       - AssetsCurrent
 
   - key: fixed_assets
-    display_name: Fixed Assets (PP&E, net)
+    display_name: Fixed Assets
     statement: balance_sheet
     flow_or_stock: stock
     unit: USD
@@ -212,7 +212,7 @@ items:
       - PropertyPlantAndEquipmentNet
 
   - key: total_assets
-    display_name: Total Assets
+    display_name: Assets
     statement: balance_sheet
     flow_or_stock: stock
     unit: USD
@@ -220,7 +220,7 @@ items:
       - Assets
 
   - key: debt
-    display_name: Debt (LT, incl. current portion)
+    display_name: Debt
     statement: balance_sheet
     flow_or_stock: stock
     unit: USD
@@ -234,7 +234,7 @@ items:
       subtract: []
 
   - key: total_liabilities
-    display_name: Total Liabilities
+    display_name: Liabilities
     statement: balance_sheet
     flow_or_stock: stock
     unit: USD
@@ -242,7 +242,7 @@ items:
       - Liabilities
 
   - key: retained_earnings
-    display_name: Retained Earnings
+    display_name: Retained
     statement: balance_sheet
     flow_or_stock: stock
     unit: USD
@@ -271,7 +271,7 @@ items:
       - DepreciationAndAmortization
 
   - key: amortization
-    display_name: Amortization
+    display_name: Amort
     statement: cash_flow
     flow_or_stock: flow
     unit: USD
@@ -281,7 +281,7 @@ items:
       - AdjustmentForAmortization
 
   - key: stock_compensation
-    display_name: Stock-Based Compensation
+    display_name: StockComp
     statement: cash_flow
     flow_or_stock: flow
     unit: USD
@@ -301,7 +301,7 @@ items:
       - PaymentsForCapitalImprovements
 
   - key: cash_from_operations
-    display_name: Operating Cash Flow
+    display_name: Op. Cash Change
     statement: cash_flow
     flow_or_stock: flow
     unit: USD
@@ -310,7 +310,7 @@ items:
       - NetCashProvidedByUsedInOperatingActivities
 
   - key: dividends_paid
-    display_name: Dividends Paid
+    display_name: DivPaid
     statement: cash_flow
     flow_or_stock: flow
     unit: USD
@@ -319,7 +319,7 @@ items:
       - PaymentsOfDividendsCommonStock
 
   - key: debt_change
-    display_name: Net Debt Change
+    display_name: Debt Change
     statement: cash_flow
     flow_or_stock: flow
     unit: USD
@@ -341,7 +341,7 @@ items:
         - RepaymentsOfDebt                 # generic — used by NVIDIA
 
   - key: equity_change
-    display_name: Net Equity Change
+    display_name: Equity Change
     statement: cash_flow
     flow_or_stock: flow
     unit: USD

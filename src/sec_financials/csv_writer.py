@@ -1,27 +1,121 @@
 """Write the main CSV + sources sidecar, zipped together.
 
-Main CSV layout (per REQUIREMENTS.md §5.3): one row per fiscal quarter,
-identifier + period columns on the left, one column per maintained item,
-notes on the far right.
+Main CSV schema (per REQUIREMENTS.md §5.3):
 
-Sources sidecar (long format): one row per (period, item, source filing)
-to support auditing of any number in the main CSV.
+  Identifier columns (left, 7 fixed):
+    Ticker, Qtr Num, FiscalQ, Fiscal Date, Reporting Date,
+    ConcatDate, Concat
+
+  Reporting columns (middle, 27, in items.yaml order):
+    one column per item, using item.display_name as the header
+
+  Guidance columns (right of reporting, 6 fixed, placeholders):
+    FY Rev Guide, NQ Rev Guide, FY GM Guide, NQ GM Guide,
+    FY EPS Guide, NQ EPS Guide
+
+  Notes column (far right):
+    "notes"
+
+Sources sidecar (long format, snake_case headers): unchanged from earlier
+revisions — it's an audit/debug artifact, not analyst output.
 """
 
 from __future__ import annotations
 
+import calendar
 import csv
 import io
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Sequence
 
 from sec_financials.config import Item
 from sec_financials.extractor import QuarterRow
 
-
 _MILLIONS = 1_000_000
+
+# Excel's date epoch is 1899-12-30 (the "1900 leap year" quirk shifts it
+# from 1900-01-01 by two days). Apr 30 2026 == serial 46142.
+_EXCEL_EPOCH = date(1899, 12, 30)
+
+# Guidance column headers. Values are blank until 8-K parsing is built.
+_GUIDANCE_COLUMNS: tuple[str, ...] = (
+    "FY Rev Guide",
+    "NQ Rev Guide",
+    "FY GM Guide",
+    "NQ GM Guide",
+    "FY EPS Guide",
+    "NQ EPS Guide",
+)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Date helpers
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def round_to_nearest_month_end(d: date) -> date:
+    """Round `d` to the nearest end-of-month date.
+
+    Ties (equidistant) go to the current month's end.
+
+      Apr 27 → Apr 30   (3 days forward vs 27 back)
+      Sep 3  → Aug 31   (3 days back vs 27 forward)
+      Mar 31 → Mar 31   (already a month-end)
+    """
+    last_day_curr = calendar.monthrange(d.year, d.month)[1]
+    end_of_curr = date(d.year, d.month, last_day_curr)
+    if d.month == 1:
+        prev_y, prev_m = d.year - 1, 12
+    else:
+        prev_y, prev_m = d.year, d.month - 1
+    end_of_prev = date(prev_y, prev_m, calendar.monthrange(prev_y, prev_m)[1])
+    days_to_curr = (end_of_curr - d).days
+    days_to_prev = (d - end_of_prev).days
+    return end_of_curr if days_to_curr <= days_to_prev else end_of_prev
+
+
+def qtr_num_from_date(d: date) -> int:
+    """Serial calendar-quarter index keyed off the rounded month-end.
+
+    qtr_num = 1 for any quarter ending Mar 31 – May 31 2020;
+            = 20 for quarter ending Dec 31 2024;
+            = 25 for quarter ending Apr 30 2026.
+
+    Formula: count months since March 2020 (inclusive) and divide by 3.
+    """
+    months_from_mar_2020 = (d.year - 2020) * 12 + (d.month - 3)
+    return months_from_mar_2020 // 3 + 1
+
+
+def excel_serial(d: date) -> int:
+    """Excel-compatible date serial number (1899-12-30 = 0)."""
+    return (d - _EXCEL_EPOCH).days
+
+
+def _fiscal_q_int(fiscal_quarter: str) -> int:
+    """Convert 'Q1'/'Q2'/'Q3'/'Q4' to an int 1-4."""
+    return int(fiscal_quarter.removeprefix("Q"))
+
+
+def _earliest_filing_date(row: QuarterRow) -> date | None:
+    """Earliest source filing date across all of the row's extracted values.
+
+    Used for the 'Reporting Date' column. The user opted for "first
+    filing date" to support predicting future filing cadences from
+    historical patterns.
+    """
+    dates: list[date] = []
+    for ev in row.values.values():
+        for src in ev.sources:
+            dates.append(src.filed)
+    return min(dates) if dates else None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Value formatting
+# ──────────────────────────────────────────────────────────────────────────
 
 
 def _format_value(v: float | None) -> str:
@@ -46,42 +140,79 @@ def _format_value(v: float | None) -> str:
     return f"{v_m:.6f}".rstrip("0").rstrip(".")
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Main CSV
+# ──────────────────────────────────────────────────────────────────────────
+
+
 def build_main_csv(rows: Sequence[QuarterRow], items: Sequence[Item]) -> str:
-    """Build the main CSV as a string."""
+    """Build the main CSV as a string with the new identifier schema."""
     buf = io.StringIO(newline="")
     writer = csv.writer(buf, lineterminator="\n")
 
     header = [
-        "ticker",
-        "fiscal_year",
-        "fiscal_quarter",
-        "period_end",
-        *(item.key for item in items),
+        "Ticker",
+        "Qtr Num",
+        "FiscalQ",
+        "Fiscal Date",
+        "Reporting Date",
+        "ConcatDate",
+        "Concat",
+        *(item.display_name for item in items),
+        *_GUIDANCE_COLUMNS,
         "notes",
     ]
     writer.writerow(header)
 
     for row in rows:
+        ticker_up = row.ticker.upper()
+        fiscal_date = (
+            round_to_nearest_month_end(row.period_end)
+            if row.period_end is not None
+            else None
+        )
+        qtr_num = qtr_num_from_date(fiscal_date) if fiscal_date is not None else None
+        reporting_date = _earliest_filing_date(row)
+        concat_date = (
+            f"{ticker_up}{excel_serial(fiscal_date)}"
+            if fiscal_date is not None
+            else ""
+        )
+        concat = f"{ticker_up}{qtr_num}" if qtr_num is not None else ""
+
         writer.writerow(
             [
-                row.ticker,
-                row.fiscal_year,
-                row.fiscal_quarter,
-                row.period_end.isoformat() if row.period_end else "",
+                ticker_up,
+                qtr_num if qtr_num is not None else "",
+                _fiscal_q_int(row.fiscal_quarter),
+                fiscal_date.isoformat() if fiscal_date else "",
+                reporting_date.isoformat() if reporting_date else "",
+                concat_date,
+                concat,
                 *(
-                    _format_value(row.values.get(item.key).value)
+                    _format_value(row.values[item.key].value)
                     if row.values.get(item.key) is not None
                     else ""
                     for item in items
                 ),
+                *("" for _ in _GUIDANCE_COLUMNS),  # placeholders
                 row.notes,
             ]
         )
     return buf.getvalue()
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Sources sidecar
+# ──────────────────────────────────────────────────────────────────────────
+
+
 def build_sources_csv(rows: Sequence[QuarterRow], items: Sequence[Item]) -> str:
-    """Build the long-format sources sidecar CSV as a string."""
+    """Build the long-format sources sidecar CSV as a string.
+
+    Keeps snake_case identifier columns to remain machine-friendly for
+    audit tooling; analyst-friendly relabeling lives only in the main CSV.
+    """
     buf = io.StringIO(newline="")
     writer = csv.writer(buf, lineterminator="\n")
 
@@ -107,7 +238,6 @@ def build_sources_csv(rows: Sequence[QuarterRow], items: Sequence[Item]) -> str:
             if ev is None:
                 continue
             if not ev.sources:
-                # Emit one blank-source row so missing values are still auditable.
                 if ev.value is None:
                     writer.writerow(
                         [
@@ -144,6 +274,11 @@ def build_sources_csv(rows: Sequence[QuarterRow], items: Sequence[Item]) -> str:
     return buf.getvalue()
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Zip packaging (unchanged)
+# ──────────────────────────────────────────────────────────────────────────
+
+
 def build_zip_bytes(
     rows: Sequence[QuarterRow],
     items: Sequence[Item],
@@ -151,11 +286,7 @@ def build_zip_bytes(
     *,
     today: datetime | None = None,
 ) -> tuple[bytes, str]:
-    """Build the main+sidecar zip in memory and return (bytes, filename).
-
-    Used by both the CLI (which writes to disk) and the web UI (which
-    streams the bytes as a download). No filesystem side effects.
-    """
+    """Build the main+sidecar zip in memory and return (bytes, filename)."""
     today = today or datetime.now(UTC)
     date_stamp = today.strftime("%Y%m%d")
     ticker_up = ticker.upper()
@@ -167,7 +298,6 @@ def build_zip_bytes(
     main_csv = build_main_csv(rows, items)
     sidecar_csv = build_sources_csv(rows, items)
 
-    # UTF-8 with BOM, per REQUIREMENTS.md §5.3 (Excel-friendly).
     bom = "﻿"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -184,11 +314,7 @@ def write_zip(
     *,
     today: datetime | None = None,
 ) -> Path:
-    """Write the main + sidecar CSVs to a zip file in `out_dir`.
-
-    Returns the path to the created zip. Thin wrapper around
-    `build_zip_bytes` for the CLI.
-    """
+    """CLI helper: write the zip to disk under `out_dir`."""
     out_dir.mkdir(parents=True, exist_ok=True)
     data, zip_name = build_zip_bytes(rows, items, ticker, today=today)
     zip_path = out_dir / zip_name
