@@ -159,16 +159,39 @@ items:
       - Cash
 
   - key: investments
-    display_name: Short-Term Investments
+    display_name: Current Marketable Securities
     statement: balance_sheet
     flow_or_stock: stock
     unit: USD
-    # Short-term marketable securities only — the standard liquidity
-    # metric. Long-term investments are excluded.
+    # Current (short-term) marketable securities. The fallback list is
+    # tried in order — first tag with a balance fact wins per quarter.
+    # Different filers and even different filings from the same filer
+    # use different tags:
+    #   - MarketableSecuritiesCurrent: combined (debt+equity) — older
+    #     convention, widely used in 10-Qs.
+    #   - DebtSecuritiesCurrent / EquitySecuritiesFvNiCurrent: ASC 320 /
+    #     ASC 321 split — newer 10-Q convention (e.g. NVDA FY2027+).
+    #   - AvailableForSaleSecuritiesDebtMaturitiesWithinOneYearFairValue:
+    #     used by some 10-Ks that classify debt by maturity bucket
+    #     instead of current/noncurrent (e.g. NVDA's 10-K).
+    #
+    # When a filer reports both equity and debt as SEPARATE current tags
+    # (rather than one combined `MarketableSecuritiesCurrent`), this
+    # fallback picks only ONE — the equity portion can be missed. That's
+    # the trade-off for avoiding double-counting against filers that
+    # report both a combined tag and a split tag in the same period
+    # (which would happen if we summed via derivation).
+    #
+    # For total marketable holdings including noncurrent equity, add a
+    # separate `long_term_investments` item using
+    # EquitySecuritiesFVNINoncurrent / MarketableSecuritiesNoncurrent.
     xbrl_tags:
-      - ShortTermInvestments
       - MarketableSecuritiesCurrent
+      - ShortTermInvestments
       - AvailableForSaleSecuritiesCurrent
+      - DebtSecuritiesCurrent
+      - EquitySecuritiesFvNiCurrent
+      - AvailableForSaleSecuritiesDebtMaturitiesWithinOneYearFairValue
 
   - key: current_assets
     display_name: Current Assets
